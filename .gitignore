@@ -1,3 +1,29 @@
+# Local tool settings
+.claude/
+.vscode/
+.idea/
+
+# Python
 __pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / editor clutter
 .DS_Store
+*.swp
+
+# Databases and exports that end up in the project folder while testing
+# (the bundled demo database is kept)
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+!examples/sample.sqlite
+*.xlsx
+~$*.xlsx
+
 node_modules/
