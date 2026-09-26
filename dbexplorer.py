@@ -346,7 +346,38 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         rel = urllib.parse.unquote(url.path).lstrip("/") or "index.html"
         if ".." in rel.split("/") or not rel.startswith(STATIC_ROOTS):
             return self.send_error(404)
+        if rel == "index.html":
+            return self.send_index()
         super().do_GET()
+
+    def end_headers(self):
+        # Make the browser check for a newer copy every time, so an updated
+        # app never runs with a stale script left over in the cache.
+        if not self.path.startswith(("/api/", "/download/")):
+            self.send_header("Cache-Control", "no-cache")
+        super().end_headers()
+
+    def send_index(self):
+        """The page, with each script and stylesheet address stamped with the
+        file's last-modified time, so updates are always fetched fresh."""
+        with open(os.path.join(APP_DIR, "index.html"), encoding="utf-8") as f:
+            html = f.read()
+
+        def stamp(m):
+            path = os.path.join(APP_DIR, m.group(2))
+            try:
+                version = int(os.path.getmtime(path))
+            except OSError:
+                return m.group(0)
+            return f'{m.group(1)}="{m.group(2)}?v={version}"'
+
+        html = re.sub(r'(src|href)="((?:js|css)/[^"?]+)"', stamp, html)
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self):
         if not self.host_ok() or not self.api_ok():

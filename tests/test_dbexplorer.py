@@ -6,6 +6,7 @@ openpyxl); everything else is standard library.
 
 import io
 import json
+import re
 import os
 import shutil
 import sqlite3
@@ -193,6 +194,17 @@ class Server(unittest.TestCase):
             with self.assertRaises(urllib.error.HTTPError) as e:
                 self.call("api/startup", headers=headers)
             self.assertEqual(e.exception.code, 403)
+
+    def test_page_scripts_are_never_served_stale(self):
+        req = urllib.request.Request(self.base)
+        with urllib.request.urlopen(req) as r:
+            html = r.read().decode()
+            self.assertEqual(r.headers.get("Cache-Control"), "no-cache")
+        for f in ["js/dom.js", "js/pipeline.js", "js/app.js", "css/app.css"]:
+            self.assertRegex(html, re.escape(f) + r"\?v=\d+", f)
+        with urllib.request.urlopen(self.base + "js/dom.js?v=1") as r:
+            self.assertEqual(r.headers.get("Cache-Control"), "no-cache")
+            self.assertIn(b"function icon", r.read())
 
     def test_only_app_files_are_served(self):
         for path in ["dbexplorer.py", ".git/config", "examples/sample.sqlite", "js/../dbexplorer.py"]:
