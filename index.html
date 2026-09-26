@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DB Explorer</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">DB Explorer</div>
+    <div id="db-info" class="db-info" hidden>
+      <span id="db-name" class="db-name"></span>
+      <button id="btn-reload" class="ghost" title="Re-read the list of tables and columns">Reload</button>
+      <button id="btn-close" class="ghost">Open another</button>
+      <button id="btn-export-all" class="secondary">Export all tables</button>
+    </div>
+  </header>
+
+  <main id="landing" class="landing">
+    <div class="open-card">
+      <h1>Open a SQLite database</h1>
+      <p class="muted">Everything stays on this computer. The database is read in place (however big it is) and opened read-only, so nothing you do here can change it.</p>
+
+      <form id="path-form" class="path-form">
+        <label for="path-input">File path</label>
+        <div class="row">
+          <input id="path-input" type="text" placeholder="/Users/you/Documents/sales.sqlite" autocomplete="off" spellcheck="false">
+          <button type="submit" class="primary">Open</button>
+        </div>
+        <p class="hint">In Finder, select the file and press <kbd>⌥</kbd><kbd>⌘</kbd><kbd>C</kbd> to copy its path, then paste it here.</p>
+      </form>
+      <p id="path-unavailable" class="notice" hidden>
+        DB Explorer needs its small helper program running. Start it from Terminal with
+        <code>python3 dbexplorer.py</code> and it will open this page for you.
+      </p>
+
+      <div id="recent" class="recent" hidden>
+        <h2>Recently opened</h2>
+        <ul id="recent-list"></ul>
+      </div>
+
+      <p class="center sample"><button id="btn-sample" class="link" type="button">Or try it with the sample database</button></p>
+      <p id="open-error" class="error" hidden></p>
+    </div>
+  </main>
+
+  <div id="workspace" class="workspace" hidden>
+    <aside class="sidebar">
+      <input id="table-search" type="search" placeholder="Find a table…" aria-label="Find a table">
+      <nav id="table-list" class="table-list"></nav>
+    </aside>
+
+    <section class="main">
+      <div class="tabs" role="tablist">
+        <button id="tab-explore" class="tab active" role="tab">Explore</button>
+        <button id="tab-sql" class="tab" role="tab">Write SQL <span class="muted">(advanced)</span></button>
+      </div>
+
+      <div id="explore-panel" class="panel">
+        <div class="builder-head">
+          <h2 id="table-title"></h2>
+          <span id="table-meta" class="muted"></span>
+        </div>
+        <div class="builder-bar">
+          <button id="btn-columns" class="chip">Columns</button>
+          <button id="btn-add-filter" class="chip">+ Filter</button>
+          <button id="btn-links" class="chip">+ Link related data</button>
+          <label class="chip toggle"><input type="checkbox" id="summary-toggle"> Summarise</label>
+          <button id="btn-reset" class="ghost small">Start over</button>
+        </div>
+        <div id="joins" class="joins"></div>
+        <div id="filters" class="filters"></div>
+        <div id="summary" class="summary" hidden></div>
+      </div>
+
+      <div id="sql-panel" class="panel" hidden>
+        <textarea id="sql-input" spellcheck="false" placeholder="SELECT * FROM customers WHERE …"></textarea>
+        <div class="row">
+          <button id="btn-run-sql" class="primary">Run</button>
+          <span class="muted small">⌘/Ctrl + Enter · read-only, so nothing here can change the database</span>
+        </div>
+      </div>
+
+      <div class="results">
+        <div class="results-bar">
+          <span id="result-count" class="result-count"></span>
+          <span class="spacer"></span>
+          <button id="btn-show-sql" class="ghost small">Show SQL</button>
+          <button id="btn-export" class="primary">Download as Excel</button>
+        </div>
+        <div id="sql-preview" class="sql-preview" hidden>
+          <pre id="sql-preview-text"></pre>
+          <button id="btn-edit-sql" class="ghost small">Edit in “Write SQL”</button>
+        </div>
+        <p id="result-error" class="error" hidden></p>
+        <div id="grid-wrap" class="grid-wrap"><table id="grid" class="grid"></table></div>
+        <div id="pager" class="pager"></div>
+      </div>
+    </section>
+  </div>
+
+  <div id="popover" class="popover" hidden></div>
+  <div id="export-panel" class="export-panel" role="status" hidden>
+    <div class="row">
+      <strong>Exporting to Excel</strong>
+      <span class="spacer"></span>
+      <button id="btn-export-cancel" class="ghost small">Cancel</button>
+    </div>
+    <div class="progress"><div id="export-bar" class="bar"></div></div>
+    <div id="export-status" class="muted small"></div>
+  </div>
+  <div id="toast" class="toast" role="status" hidden></div>
+
+  <script src="js/query.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
