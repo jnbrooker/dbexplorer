@@ -445,6 +445,50 @@
     return step.type;
   }
 
+  // ---------- searching ----------
+  const SEARCH_MODES = [
+    { id: 'contains', label: 'contains' },
+    { id: 'starts', label: 'starts with' },
+    { id: 'eq', label: 'is exactly' },
+  ];
+
+  // How a search matches a column, as SQL + its one parameter. Every value is
+  // searched as text, so "2024-03" finds March dates and "0770" finds phone
+  // numbers. contains/starts ignore case (for A–Z); "is exactly" doesn't,
+  // matching the filter step it turns into.
+  function searchTest(colSql, text, mode) {
+    if (mode === 'eq') return { sql: `CAST(${colSql} AS TEXT) = ?`, param: text };
+    const pattern = mode === 'starts' ? likeEscape(text) + '%' : '%' + likeEscape(text) + '%';
+    return { sql: `CAST(${colSql} AS TEXT) LIKE ? ESCAPE '\\'`, param: pattern };
+  }
+
+  // One pass over the query's rows counting, for each column, how many rows
+  // match, plus how many match in any column. Result row:
+  // [rows scanned, per-column counts..., any-column count].
+  // Each column is tested once per row into m0, m1…; the inner LIMIT -1
+  // stops SQLite merging the levels and re-running every test for the
+  // "any column" total (twice as fast on big tables).
+  function searchQuery(compiled, text, mode, sample) {
+    const tests = compiled.cols.map((c) => searchTest(qi(c.name), text, mode));
+    const flags = tests.map((_, i) => `m${i}`);
+    const sql = 'SELECT COUNT(*), ' +
+      flags.map((m) => `COALESCE(SUM(${m}), 0)`).join(', ') +
+      `, COALESCE(SUM(${flags.join(' OR ')}), 0)` +
+      ` FROM (SELECT ${tests.map((t, i) => `(${t.sql}) AS m${i}`).join(', ')}` +
+      ` FROM (SELECT * FROM (${compiled.unsortedSql}) LIMIT ${sample ? Math.floor(sample) : -1}) LIMIT -1)`;
+    return { sql, params: tests.map((t) => t.param).concat(compiled.params) };
+  }
+
+  // The values of one column that match a search, most common first, with
+  // how many rows have each. Reads every row, so values anywhere are found.
+  function valueSearchQuery(compiled, colName, text, mode, limit) {
+    const t = searchTest('v', text, mode || 'contains');
+    return {
+      sql: `SELECT v, COUNT(*) FROM (SELECT ${qi(colName)} AS v FROM (${compiled.unsortedSql})) WHERE ${t.sql} GROUP BY v ORDER BY 2 DESC LIMIT ${Math.floor(limit) + 1}`,
+      params: compiled.params.concat([t.param]),
+    };
+  }
+
   // ---------- relationships ----------
   // Tables whose foreign keys can be followed from the current columns.
   function outgoingLinks(cols, schema) {
@@ -540,7 +584,7 @@
   }
 
   return {
-    qi, affinity, isNumeric, OPERATORS, MEASURES, JOIN_KINDS, compile, stepErrors, describe, describeCondition,
+    qi, affinity, isNumeric, OPERATORS, MEASURES, JOIN_KINDS, SEARCH_MODES, searchQuery, valueSearchQuery, compile, stepErrors, describe, describeCondition,
     outgoingLinks, parentOf, referencesTo, relatedFor, primaryKey, suggestMatches, show, asNumber, sourceName,
   };
 });

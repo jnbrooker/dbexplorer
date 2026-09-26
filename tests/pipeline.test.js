@@ -200,3 +200,43 @@ test('suggested match columns', () => {
   assert.deepStrictEqual(P.suggestMatches(cust, orders, schema, 'orders')[0], ['id', 'customer_id']);
   assert.deepStrictEqual(P.suggestMatches(orders, cust, schema, 'customers')[0], ['customer_id', 'id']);
 });
+
+// ---------- searching ----------
+test('search counts matches per column and in any column, in one pass', () => {
+  const c = P.compile([{ type: 'source', table: 'customers' }], schema);
+  const { sql: s, params } = P.searchQuery(c, 'LOVELACE', 'contains');
+  const [scanned, ...rest] = sql(s, params)[0];
+  const any = rest.pop();
+  const byCol = Object.fromEntries(c.cols.map((col, i) => [col.name, rest[i]]));
+  const expected = sql("SELECT COUNT(*) FROM customers WHERE name LIKE '%lovelace%'")[0][0];
+  assert.strictEqual(scanned, 120);
+  assert.ok(expected > 0);
+  assert.strictEqual(byCol.name, expected);         // case-insensitive
+  assert.strictEqual(byCol.email, expected);
+  assert.strictEqual(byCol.id, 0);
+  assert.strictEqual(any, expected);                 // same rows, counted once
+});
+
+test('search treats numbers and dates as text, and escapes wildcards', () => {
+  const c = P.compile([{ type: 'source', table: 'products' }], schema);
+  const run1 = (text, mode) => sql(...Object.values(P.searchQuery(c, text, mode)))[0];
+  const price = c.cols.findIndex((x) => x.name === 'price') + 1;
+  assert.ok(run1('123.4', 'contains')[price] > 0);   // REAL searched as text
+  assert.strictEqual(run1('%', 'contains').at(-1), 0); // literal %, not "anything"
+  const sku = c.cols.findIndex((x) => x.name === 'sku') + 1;
+  assert.strictEqual(run1('000017', 'eq')[sku], 1);
+  assert.strictEqual(run1('00001', 'starts')[sku], 10);
+});
+
+test('search can be limited to a sample of rows', () => {
+  const c = P.compile([{ type: 'source', table: 'order_items' }], schema);
+  assert.strictEqual(sql(...Object.values(P.searchQuery(c, 'x', 'contains', 50)))[0][0], 50);
+});
+
+test('value search finds values in a column, most common first', () => {
+  const c = P.compile([{ type: 'source', table: 'orders' }], schema);
+  const { sql: s, params } = P.valueSearchQuery(c, 'status', 'PED', 'contains', 10);
+  const rows = sql(s, params);
+  assert.deepStrictEqual(rows.map((r) => r[0]).sort(), ['shipped']);
+  assert.strictEqual(rows[0][1], sql("SELECT COUNT(*) FROM orders WHERE status = 'shipped'")[0][0]);
+});

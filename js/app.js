@@ -432,6 +432,8 @@
     $('sql-panel').hidden = !sql;
     $('steps-panel').hidden = sql || !Q();
     $('btn-show-sql').hidden = sql;
+    $('search-box').hidden = sql || !Q();
+    if (sql) $('search-results').hidden = true;
     $('sql-preview').hidden = sql || !sqlShown;
     $('view-banner').hidden = true;
     renderTabs();
@@ -711,6 +713,7 @@
   let refreshSeq = 0;
   let lastTotal = null;
   let lastPage = { rows: 0, more: false };
+  let lastGrid = null;
 
   function setLoading(on) { $('grid-wrap').classList.toggle('loading', on); }
 
@@ -771,7 +774,13 @@
     try {
       const r = await query(c.sql + ' LIMIT ? OFFSET ?', [...c.params, PAGE_SIZE, q.page * PAGE_SIZE], 'page', PAGE_SIZE, workLabel(q));
       if (stale()) return;
+      lastGrid = { cols: c.cols, rows: r.rows, order: c.order };
       renderGrid(c.cols, r.rows, c.order);
+      // Keep search counts in step with what's on screen (not on page turns).
+      if (srch.text) {
+        const sig = [c.sql, JSON.stringify(c.params), srch.text, srch.mode].join('\u0000');
+        if (!srch.sig.startsWith(sig)) { srch.full = false; scheduleSearch(50); }
+      }
       lastPage = { rows: r.rows.length, more: r.more };
       renderPager();
     } catch (e) {
@@ -816,7 +825,7 @@
     }));
     const body = rows.length
       ? rows.map((row) => h('tr', null, row.map((v, k) => {
-        const td = cell(v);
+        const td = cell(v, interactive ? srch : null);
         if (interactive) {
           td.classList.add('clickable');
           td.addEventListener('click', () => cellMenu(td, cols[k], v, row, cols));
@@ -827,16 +836,28 @@
     $('grid').replaceChildren(h('thead', null, head), h('tbody', null, body));
   }
 
-  function cell(v) {
+  function cell(v, hl) {
     if (v === null || v === undefined) return h('td', { class: 'null' }, '');
-    if (typeof v === 'object') {
-      if (v.$int != null) return h('td', { class: 'num' }, v.$int);
-      if (v.$blob != null) return h('td', { class: 'null' }, `[binary, ${fmt(v.$blob)} bytes]`);
-      return h('td', null, String(v.$text ?? ''));
+    if (typeof v === 'object' && v.$blob != null) return h('td', { class: 'null' }, `[binary, ${fmt(v.$blob)} bytes]`);
+    const numeric = typeof v === 'number' || (typeof v === 'object' && v.$int != null);
+    const s = typeof v === 'object' ? String(v.$int ?? v.$text ?? '') : String(v);
+    const text = s.length > 200 ? s.slice(0, 200) + '…' : s;
+    const td = h('td', { class: numeric ? 'num' : null, title: s.length > 200 ? s.slice(0, 2000) : null });
+    const m = hl && hl.text ? matchAt(text, hl.text, hl.mode) : -1;
+    if (m < 0) td.textContent = text;
+    else {
+      td.classList.add('hit');
+      td.append(text.slice(0, m), h('mark', null, text.slice(m, m + hl.text.length)), text.slice(m + hl.text.length));
     }
-    if (typeof v === 'number') return h('td', { class: 'num' }, String(v));
-    const s = String(v);
-    return s.length > 200 ? h('td', { title: s.slice(0, 2000) }, s.slice(0, 200) + '…') : h('td', null, s);
+    return td;
+  }
+
+  // Where a search matches a displayed value (-1 if it doesn't), mirroring
+  // the SQL: contains/starts ignore case, "is exactly" doesn't.
+  function matchAt(text, needle, mode) {
+    if (mode === 'eq') return text === needle ? 0 : -1;
+    const i = text.toLowerCase().indexOf(needle.toLowerCase());
+    return mode === 'starts' ? (i === 0 ? 0 : -1) : i;
   }
 
   function renderPager() {
@@ -927,81 +948,121 @@
     ], col.name);
   }
 
-  // Excel-style "tick the values to keep", with counts.
+  // Excel-style "tick the values to keep", with counts. Typing in the search
+  // box searches the whole column in the database, not just the values listed.
   function valuesFilter(anchor, col) {
     const q = Q();
     const vi = viewIndex(q);
-    const c = compileView(q);
     const existing = q.steps[vi] && q.steps[vi].type === 'filter' && q.steps[vi].conditions.length === 1 &&
       q.steps[vi].conditions[0].col === col.name && q.steps[vi].conditions[0].op === 'in' && Array.isArray(q.steps[vi].conditions[0].value)
       ? q.steps[vi] : null;
     // When changing an existing value filter, list the values going into it.
-    const source = existing ? P.compile(q.steps, schema, vi - 1, ctxFor(q)) : c;
+    const source = existing ? P.compile(q.steps, schema, vi - 1, ctxFor(q)) : compileView(q);
     const key = (v) => JSON.stringify(v);
-    let entries = [];
-    let full = false;
-    let sortMode = 'count';
     const exCond = existing && existing.conditions[0];
     const exSet = exCond ? new Set(exCond.value.map(key)) : null;
+    let top = [];       // the most common values (no search)
+    let found = null;   // values matching the search, or null when not searching
+    let more = false;   // more values exist than are listed
+    let full = false;
+    let sortMode = 'count';
+    let searchTimer = null;
+    let searchSeq = 0;
 
-    const search = h('input', { type: 'search', placeholder: 'Search values…', oninput: () => draw() });
-    const all = h('input', { type: 'checkbox', checked: true, onchange: (e) => { visible().forEach((en) => { en.checked = e.target.checked; }); draw(); } });
+    const search = h('input', { type: 'search', placeholder: 'Search all values…', oninput: () => {
+      clearTimeout(searchTimer);
+      searchTimer = setTimeout(runSearch, 300);
+    } });
+    const all = h('input', { type: 'checkbox', checked: true, onchange: (e) => { shown().forEach((en) => { en.checked = e.target.checked; }); draw(); } });
     const list = h('div', { class: 'check-list values' }, h('p', { class: 'muted pad' }, 'Loading values…'));
     const note = h('div', { class: 'muted small' });
     const sortBtn = h('button', { class: 'ghost small', onclick: () => { sortMode = sortMode === 'count' ? 'az' : 'count'; draw(); } });
-    const visible = () => {
-      const s = search.value.trim().toLowerCase();
-      return entries.filter((en) => !s || display(en.v).toLowerCase().includes(s));
-    };
+    const shown = () => found || top;
+
     const draw = () => {
       sortBtn.textContent = sortMode === 'count' ? 'Most common first' : 'A → Z';
-      const shown = visible().sort(sortMode === 'count' ? (a, b) => b.n - a.n
+      const items = shown().slice().sort(sortMode === 'count' ? (a, b) => b.n - a.n
         : (a, b) => display(a.v).localeCompare(display(b.v), undefined, { numeric: true }));
-      all.checked = shown.length > 0 && shown.every((en) => en.checked);
-      list.replaceChildren(...shown.slice(0, 1000).map((en) => h('label', { class: 'check' },
-        h('input', { type: 'checkbox', checked: en.checked, onchange: (e) => { en.checked = e.target.checked; all.checked = visible().every((x) => x.checked); } }),
+      all.checked = items.length > 0 && items.every((en) => en.checked);
+      list.replaceChildren(...items.map((en) => h('label', { class: 'check' },
+        h('input', { type: 'checkbox', checked: en.checked, onchange: (e) => { en.checked = e.target.checked; all.checked = shown().every((x) => x.checked); } }),
         h('span', { class: 'value' + (en.v === null ? ' muted' : '') }, display(en.v, 80)),
         h('span', { class: 'n' }, fmt(en.n)))));
-      if (!shown.length && entries.length) list.replaceChildren(h('p', { class: 'muted pad' }, 'No values match.'));
+      if (!items.length) list.replaceChildren(h('p', { class: 'muted pad' }, found ? 'No values match.' : 'No values.'));
+      const parts = [];
+      if (found) {
+        parts.push(`${more ? 'The 1,000 most common matching values' : `${fmt(found.length)} matching value${found.length === 1 ? '' : 's'}`}, from all rows. Only the ticked ones will be kept.`);
+      } else {
+        const sampled = !full && (lastTotal == null || lastTotal > VALUES_SAMPLE);
+        parts.push(more ? 'The 1,000 most common values' : `${fmt(top.length)} different values`,
+          sampled ? ` in the first ${fmt(VALUES_SAMPLE)} rows. ` : '. ');
+        if (sampled) parts.push(h('button', { class: 'link', onclick: () => { full = true; load(); } }, 'Check all rows'));
+        if (more) parts.push(' Search to find others.');
+      }
+      note.replaceChildren(...parts);
     };
+
     const load = async () => {
       list.replaceChildren(h('p', { class: 'muted pad' }, full ? 'Reading every row…' : 'Loading values…'));
       try {
         const r = await query(
           `SELECT v, COUNT(*) FROM (SELECT ${qi(col.name)} AS v FROM (${source.unsortedSql})${full ? '' : ` LIMIT ${VALUES_SAMPLE}`}) GROUP BY v ORDER BY 2 DESC LIMIT 1001`,
           source.params, 'values', 1001, 'Reading values');
-        const had = new Map(entries.map((en) => [key(en.v), en.checked]));
-        entries = r.rows.slice(0, 1000).map(([v, n]) => ({
+        const had = new Map(top.map((en) => [key(en.v), en.checked]));
+        more = r.more || r.rows.length > 1000;
+        top = r.rows.slice(0, 1000).map(([v, n]) => ({
           v, n,
           checked: had.has(key(v)) ? had.get(key(v)) : exSet ? (exCond.negate ? !exSet.has(key(v)) : exSet.has(key(v))) : true,
         }));
-        const sampled = !full && (lastTotal == null || lastTotal > VALUES_SAMPLE);
-        note.replaceChildren(
-          r.rows.length > 1000 ? 'The 1,000 most common values' : `${fmt(entries.length)} different values`,
-          sampled ? ' in the first ' + fmt(VALUES_SAMPLE) + ' rows. ' : '. ',
-          sampled ? h('button', { class: 'link', onclick: () => { full = true; load(); } }, 'Check all rows') : null);
-        draw();
+        if (!found) draw();
       } catch (e) {
         if (!(e instanceof CancelledError)) list.replaceChildren(h('p', { class: 'error' }, e.message));
       }
     };
-    const apply = () => {
-      const keep = entries.filter((en) => en.checked).map((en) => en.v);
-      const drop = entries.filter((en) => !en.checked).map((en) => en.v);
-      closeLayer();
-      if (!drop.length) { // everything ticked: no filter
-        if (existing) deleteStep(vi);
-        return;
+
+    const runSearch = async () => {
+      const text = search.value.trim();
+      const seq = ++searchSeq;
+      if (!text) { found = null; more = top.length >= 1000; draw(); return; }
+      list.replaceChildren(h('p', { class: 'muted pad' }, 'Searching all rows…'));
+      try {
+        const { sql, params } = P.valueSearchQuery(source, col.name, text, 'contains', 1000);
+        const r = await query(sql, params, 'values', 1001, 'Searching values');
+        if (seq !== searchSeq) return;
+        more = r.more || r.rows.length > 1000;
+        found = r.rows.slice(0, 1000).map(([v, n]) => ({ v, n, checked: true })); // like Excel: matches start ticked
+        draw();
+      } catch (e) {
+        if (seq === searchSeq && !(e instanceof CancelledError)) list.replaceChildren(h('p', { class: 'error' }, e.message));
       }
-      // Store whichever list is shorter; "not one of" also keeps values that
-      // weren't listed (beyond the 1,000 shown), the way Excel does.
-      const cond = keep.length <= drop.length
-        ? { col: col.name, op: 'in', value: keep }
-        : { col: col.name, op: 'in', value: drop, negate: true };
+    };
+
+    const apply = () => {
+      closeLayer();
+      let cond;
+      if (found) {
+        // Searching: keep exactly the ticked matches.
+        const keep = found.filter((en) => en.checked).map((en) => en.v);
+        if (!keep.length) return toast('Tick at least one value to keep.', true);
+        cond = { col: col.name, op: 'in', value: keep };
+      } else {
+        const keep = top.filter((en) => en.checked).map((en) => en.v);
+        const drop = top.filter((en) => !en.checked).map((en) => en.v);
+        if (!drop.length) { // everything ticked: no filter
+          if (existing) deleteStep(vi);
+          return;
+        }
+        // Store whichever list is shorter; "not one of" also keeps values that
+        // weren't listed (beyond the 1,000 shown), the way Excel does.
+        cond = keep.length <= drop.length
+          ? { col: col.name, op: 'in', value: keep }
+          : { col: col.name, op: 'in', value: drop, negate: true };
+      }
       const step = { type: 'filter', match: 'all', conditions: [cond] };
       if (existing) replaceStep(vi, step);
       else addStep(step);
     };
+
     popover(anchor, h('div', { class: 'pop-values' },
       h('div', { class: 'row' }, search, sortBtn),
       h('label', { class: 'check select-all' }, all, h('span', null, '(Select all)')),
@@ -1011,6 +1072,73 @@
         h('button', { class: 'primary small', onclick: apply }, 'OK'))));
     load();
     search.focus();
+  }
+
+  // ---------- search across every column ----------
+  // One pass over the rows counts matches in each column; click a column (or
+  // "any of these") to turn the search into a filter step.
+  const srch = { text: '', mode: 'contains', full: false, seq: 0, timer: null, sig: '' };
+
+  function scheduleSearch(delay) {
+    clearTimeout(srch.timer);
+    srch.timer = setTimeout(runSearch, delay);
+  }
+
+  async function runSearch() {
+    const box = $('search-results');
+    const q = Q();
+    const text = srch.text;
+    if (!q || activeId === 'sql' || !text) { box.hidden = true; box.replaceChildren(); srch.sig = ''; return; }
+    const c = compileView(q);
+    if (!c.cols || (c.error && c.error.step <= viewIndex(q))) { box.hidden = true; return; }
+    const sample = srch.full ? 0 : VALUES_SAMPLE;
+    srch.sig = [c.sql, JSON.stringify(c.params), text, srch.mode, sample].join('\u0000');
+    const seq = ++srch.seq;
+    box.hidden = false;
+    box.replaceChildren(h('span', { class: 'muted small' }, 'Searching…'));
+    try {
+      const { sql, params } = P.searchQuery(c, text, srch.mode, sample);
+      const r = await query(sql, params, 'search', 1, srch.full ? 'Searching all rows' : 'Searching');
+      if (seq !== srch.seq) return;
+      const [scanned, ...counts] = r.rows[0];
+      const any = counts.pop();
+      const hits = c.cols.map((col, i) => ({ col, n: counts[i] })).filter((x) => x.n > 0).sort((a, b) => b.n - a.n);
+      const sampled = sample && scanned >= sample;
+      const where = sampled ? ` in the first ${fmt(sample)} rows` : '';
+      const modeLabel = P.SEARCH_MODES.find((m) => m.id === srch.mode).label;
+      box.replaceChildren(...[
+        h('span', { class: 'small' }, hits.length
+          ? `Found${where} in ${hits.length} column${hits.length === 1 ? '' : 's'}:`
+          : `No matches for “${text}”${where}.`),
+        ...hits.map(({ col, n }) => h('button', {
+          class: 'chip-btn', title: `Keep rows where ${col.name} ${modeLabel} “${text}”`,
+          onclick: () => filterFromSearch([col.name]),
+        }, col.name, h('span', { class: 'n' }, fmt(n)))),
+        hits.length > 1 ? h('button', {
+          class: 'chip-btn any', title: `Keep rows where any of these columns ${modeLabel} “${text}”`,
+          onclick: () => filterFromSearch(hits.map((x) => x.col.name)),
+        }, 'Any of these', h('span', { class: 'n' }, fmt(any))) : null,
+        sampled ? h('button', { class: 'link small', onclick: () => { srch.full = true; runSearch(); } }, 'Search all rows') : null,
+        hits.length ? h('span', { class: 'muted small push' }, 'Click to filter') : null,
+      ].filter(Boolean));
+    } catch (e) {
+      if (seq !== srch.seq) return;
+      srch.sig = '';
+      if (e instanceof CancelledError) {
+        box.replaceChildren(h('span', { class: 'muted small' }, 'Search stopped. '),
+          h('button', { class: 'link small', onclick: runSearch }, 'Search again'));
+      } else {
+        box.replaceChildren(h('span', { class: 'error small' }, e.message));
+      }
+    }
+  }
+
+  function filterFromSearch(names) {
+    addStep({
+      type: 'filter',
+      match: names.length > 1 ? 'any' : 'all',
+      conditions: names.map((col) => ({ col, op: srch.mode, value: srch.text })),
+    });
   }
 
   // ---------- cell menu ----------
@@ -1548,6 +1676,17 @@
 
     $('btn-run-sql').addEventListener('click', runSql);
     $('btn-activity-cancel').addEventListener('click', cancelActivity);
+    $('search-mode').replaceChildren(...P.SEARCH_MODES.map((m) => h('option', { value: m.id }, m.label)));
+    const searchChanged = (delay) => {
+      srch.text = $('search-input').value.trim();
+      srch.mode = $('search-mode').value;
+      srch.full = false;
+      if (lastGrid && activeId !== 'sql') renderGrid(lastGrid.cols, lastGrid.rows, lastGrid.order);
+      scheduleSearch(delay);
+    };
+    $('search-input').addEventListener('input', () => searchChanged(400));
+    $('search-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') searchChanged(0); });
+    $('search-mode').addEventListener('change', () => searchChanged(0));
     $('sql-input').addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runSql(); }
     });

@@ -93,11 +93,16 @@
         <div id="view-banner" class="view-banner" hidden></div>
         <div class="results-bar">
           <span id="result-count" class="result-count"></span>
+          <div id="search-box" class="search-box">
+            <input id="search-input" type="search" placeholder="Search this data…" aria-label="Search this data" autocomplete="off" spellcheck="false">
+            <select id="search-mode" aria-label="How to match"></select>
+          </div>
           <span class="spacer"></span>
           <span class="muted small hint-inline">Click a cell or a column heading for options</span>
           <button id="btn-show-sql" class="ghost small">Show SQL</button>
           <button id="btn-export" class="primary">Download as Excel</button>
         </div>
+        <div id="search-results" class="search-results" role="status" hidden></div>
         <div id="sql-preview" class="sql-preview" hidden>
           <pre id="sql-preview-text"></pre>
           <button id="btn-edit-sql" class="ghost small">Edit as SQL</button>

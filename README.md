@@ -43,7 +43,15 @@ back. Queries open as tabs and are remembered for each database.
 - **Click a column heading:** sort, *Filter by values…* (an Excel-style tick
   list with counts), remove empty rows, group by, rename, remove, and for key
   columns *Expand* (bring in the linked table's columns, ⤢) or *Count
-  matching …*.
+  matching …*. Searching the value list searches the whole column in the
+  database, so it finds values beyond the 1,000 listed.
+- **Search this data:** type into the box above the grid and one pass over
+  the rows shows which columns contain it, with counts (*name 14 · email 14*).
+  Matches are highlighted. Click a column, or *Any of these*, to turn the
+  search into a filter step. Choose *contains*, *starts with* or *is exactly*;
+  numbers and dates are searched as text, so "2024-03" finds March. On big
+  tables it searches the first 200,000 rows straight away, then *Search all
+  rows* when you want everything.
 
 The typed filters are still there (contains, between, is one of…) for when
 you need them.
