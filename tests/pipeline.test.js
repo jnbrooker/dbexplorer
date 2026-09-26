@@ -125,7 +125,7 @@ test('relationships: parents, and where a key is used elsewhere', () => {
 
 test('step descriptions read naturally', () => {
   assert.strictEqual(P.describe({ type: 'filter', conditions: [{ col: 'sku', op: 'eq', value: '000017' }] }), 'Filtered: sku = 000017');
-  assert.strictEqual(P.describe({ type: 'sort', by: [{ col: 'price', dir: 'desc' }] }), 'Sorted by price ↓');
+  assert.strictEqual(P.describe({ type: 'sort', by: [{ col: 'price', dir: 'desc' }] }), 'Sorted by price, descending');
   assert.strictEqual(P.describe({ type: 'filter', conditions: [{ col: 'status', op: 'in', value: ['a', 'b', 'c', 'd'] }] }), 'Filtered: status is one of a, b, c +1 more');
 });
 
@@ -239,4 +239,27 @@ test('value search finds values in a column, most common first', () => {
   const rows = sql(s, params);
   assert.deepStrictEqual(rows.map((r) => r[0]).sort(), ['shipped']);
   assert.strictEqual(rows[0][1], sql("SELECT COUNT(*) FROM orders WHERE status = 'shipped'")[0][0]);
+});
+
+test('merge can keep only the other table\'s columns', () => {
+  // "Find these customers' orders, and keep just the orders"
+  const { q, rows } = run([
+    { type: 'source', table: 'customers' },
+    { type: 'filter', conditions: [{ col: 'id', op: 'in', value: [1, 2] }] },
+    { type: 'merge', source: { table: 'orders' }, kind: 'inner', on: [['id', 'customer_id']], leftColumns: [], prefix: '' },
+  ]);
+  assert.deepStrictEqual(q.cols.map((c) => c.name), ['id', 'customer_id', 'ordered_at', 'status']);
+  assert.deepStrictEqual(q.cols[0].prov, { table: 'orders', column: 'id' }); // still follows keys
+  assert.strictEqual(rows.length, sql('SELECT COUNT(*) FROM orders WHERE customer_id IN (1, 2)')[0][0]);
+  assert.ok(rows.every((r) => r[1] === 1 || r[1] === 2));
+  assert.match(P.describe({ type: 'merge', source: { table: 'orders' }, on: [['id', 'customer_id']], kind: 'inner', leftColumns: [] }), /keeping only orders columns/);
+  const some = P.compile([{ type: 'source', table: 'customers' },
+    { type: 'merge', source: { table: 'orders' }, on: [['id', 'customer_id']], leftColumns: ['name'], columns: ['status'] }], schema);
+  assert.deepStrictEqual(some.cols.map((c) => c.name), ['name', 'orders.status']);
+});
+
+test('two tables\' "id" primary keys are not suggested as a match', () => {
+  const cust = P.compile([{ type: 'source', table: 'customers' }], schema).cols;
+  const orders = P.compile([{ type: 'source', table: 'orders' }], schema).cols;
+  assert.deepStrictEqual(P.suggestMatches(cust, orders, schema, 'orders'), [['id', 'customer_id']]);
 });

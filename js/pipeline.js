@@ -201,7 +201,10 @@
       findCol(rel, l, what);
       findCol(right, r, what);
     }
-    const taken = new Set(rel.cols.map((c) => c.name.toLowerCase()));
+    // step.leftColumns (optional) keeps only some of this query's columns;
+    // [] keeps none, e.g. "find these venues' events, and keep just the events".
+    const keepLeft = step.leftColumns ? step.leftColumns.map((n) => findCol(rel, n, what)) : rel.cols;
+    const taken = new Set(keepLeft.map((c) => c.name.toLowerCase()));
     const prefix = step.prefix ?? sourceName(step.source);
     const added = kind === 'anti' ? [] : (step.columns || right.cols.map((c) => c.name)).map((name) => {
       const rc = findCol(right, name, what);
@@ -210,13 +213,17 @@
     const on = step.on.map(([l, r]) => `p.${qi(l)} = j.${qi(r)}`).join(' AND ');
     const join = { left: 'LEFT JOIN', inner: 'JOIN', anti: 'LEFT JOIN', full: 'FULL JOIN' }[kind];
     if (!join) throw new StepError(`Unknown way of merging “${kind}”`);
-    let sql = `SELECT p.*${added.map((c) => `, j.${qi(c.src)} AS ${qi(c.name)}`).join('')} FROM ${wrap(rel)} AS p ${join} ${wrap(right)} AS j ON ${on}`;
+    if (!keepLeft.length && !added.length) throw new StepError('This merge keeps no columns');
+    const select = (step.leftColumns ? keepLeft.map((c) => `p.${qi(c.name)}`) : ['p.*'])
+      .concat(added.map((c) => `j.${qi(c.src)} AS ${qi(c.name)}`));
+    let sql = `SELECT ${select.join(', ')} FROM ${wrap(rel)} AS p ${join} ${wrap(right)} AS j ON ${on}`;
     if (kind === 'anti') sql += ` WHERE j.${qi(step.on[0][1])} IS NULL`;
+    const kept = new Set(keepLeft.map((c) => c.name));
     return {
       sql,
       params: rel.params.concat(right.params),
-      cols: rel.cols.concat(added.map(({ src, ...c }) => c)),
-      order: rel.order, base: null, plain: false,
+      cols: keepLeft.concat(added.map(({ src, ...c }) => c)),
+      order: rel.order.filter((o) => kept.has(o.col)), base: null, plain: false,
     };
   }
 
@@ -426,7 +433,8 @@
       case 'link': return `Linked ${step.table} (via ${step.pairs.map((p) => p[0]).join(', ')})`;
       case 'merge': {
         const kind = { left: '', inner: ', only matching rows', anti: ', only rows with no match', full: ', all rows from both' }[step.kind || 'left'];
-        return `Merged with ${sourceName(step.source)} on ${step.on.map((p) => p[0]).join(', ')}${kind}`;
+        const only = step.leftColumns && !step.leftColumns.length ? `, keeping only ${sourceName(step.source)} columns` : '';
+        return `Merged with ${sourceName(step.source)} on ${step.on.map((p) => p[0]).join(', ')}${kind}${only}`;
       }
       case 'lookup': return `Added ${step.measures.map((m) => (MEASURES.find((d) => d.id === m.fn) || {}).label.toLowerCase() + (m.col ? ' ' + m.col : '')).join(', ')} from ${sourceName(step.source)}`;
       case 'append': return `Appended ${sourceName(step.source)}`;
@@ -436,8 +444,8 @@
       }
       case 'columns': return `Chose ${step.keep.length} column${step.keep.length === 1 ? '' : 's'}`;
       case 'remove': return `Removed ${step.cols.join(', ')}`;
-      case 'rename': return `Renamed ${step.from} → ${step.to}`;
-      case 'sort': return 'Sorted by ' + step.by.map((o) => `${o.col} ${o.dir === 'desc' ? '↓' : '↑'}`).join(', ');
+      case 'rename': return `Renamed ${step.from} to ${step.to}`;
+      case 'sort': return step.by.length ? 'Sorted by ' + step.by.map((o) => `${o.col}, ${o.dir === 'desc' ? 'descending' : 'ascending'}`).join('; then ') : 'Sort cleared';
       case 'group': return step.by.length ? `Grouped by ${step.by.join(', ')}` : 'Summarised all rows';
       case 'distinct': return 'Removed duplicate rows';
       case 'top': return `Kept first ${Number(step.n).toLocaleString()} rows`;
@@ -572,7 +580,16 @@
       const r = right.find((c) => c.name === pk);
       for (const l of left) if (r && l.name.toLowerCase() === `${singular}_${pk}`.toLowerCase()) add(l, r);
     }
-    for (const l of left) for (const r of right) if (l.name.toLowerCase() === r.name.toLowerCase()) add(l, r);
+    // Same name, unless both are primary keys of different tables ("id" = "id"
+    // across two tables is almost never a real match).
+    const isPk = (c) => c.prov && primaryKey(c.prov.table, schema) === c.prov.column;
+    for (const l of left) {
+      for (const r of right) {
+        if (l.name.toLowerCase() !== r.name.toLowerCase()) continue;
+        if (isPk(l) && isPk(r) && l.prov.table !== r.prov.table) continue;
+        add(l, r);
+      }
+    }
     return out;
   }
 

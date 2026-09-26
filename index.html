@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">DB Explorer</div>
+    <div class="brand"><span class="brand-mark">DB</span><span class="brand-name">Explorer</span></div>
     <div id="db-info" class="db-info" hidden>
       <span id="db-name" class="db-name"></span>
       <button id="btn-reload" class="ghost" title="Re-read the list of tables and columns">Reload</button>
@@ -58,24 +58,32 @@
         <div class="toolbar" role="toolbar">
           <div class="tool-group">
             <span class="tool-label">Columns</span>
+            <div class="tool-set">
             <button id="t-columns" class="tool">Choose</button>
             <button id="t-link" class="tool" title="Bring in columns from a table this one links to">Expand linked</button>
+            </div>
           </div>
           <div class="tool-group">
             <span class="tool-label">Rows</span>
+            <div class="tool-set">
             <button id="t-filter" class="tool">Filter</button>
             <button id="t-distinct" class="tool">Remove duplicates</button>
             <button id="t-top" class="tool">Keep top</button>
+            </div>
           </div>
           <div class="tool-group">
             <span class="tool-label">Transform</span>
+            <div class="tool-set">
             <button id="t-group" class="tool">Group by</button>
+            </div>
           </div>
           <div class="tool-group">
             <span class="tool-label">Combine</span>
+            <div class="tool-set">
             <button id="t-merge" class="tool" title="Join another table or query on matching columns">Merge</button>
             <button id="t-lookup" class="tool" title="Add a count, total or average from a related table, one per row">Add figures</button>
             <button id="t-append" class="tool" title="Stack another table or query underneath">Append</button>
+            </div>
           </div>
         </div>
         <div id="step-editor" class="step-editor" hidden></div>
@@ -85,7 +93,7 @@
         <textarea id="sql-input" spellcheck="false" placeholder="SELECT * FROM customers WHERE …"></textarea>
         <div class="row">
           <button id="btn-run-sql" class="primary">Run</button>
-          <span class="muted small">⌘/Ctrl + Enter · read-only, so nothing here can change the database</span>
+          <span class="muted small">Cmd/Ctrl + Enter to run. Read-only: nothing here can change the database.</span>
         </div>
       </div>
 

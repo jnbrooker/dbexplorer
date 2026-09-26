@@ -62,7 +62,11 @@ you need them.
   suggested from foreign keys and names, and it checks how many rows find a
   match before you commit. Choose how to keep rows: all rows here, only
   matching rows, only rows with no match (e.g. customers who never ordered),
-  or all rows from both.
+  or all rows from both. Then choose which columns to keep. *Both*, *Only
+  events* or *Only this query* are one click each, or tick columns
+  individually. For example: filter venues to the one you want, merge with
+  events, choose *Only events*, and you have that venue's events with just
+  the events columns.
 - **Add figures**: add a count, total, average, min or max from matching rows
   in a related table, one figure per row. Rows are never duplicated.
 - **Append**: stack another table or query underneath, matching columns by
@@ -72,6 +76,13 @@ you need them.
 Also: **Group by**, **Remove duplicates**, **Keep top rows**, **Choose
 columns**, **Show SQL** / **Write SQL**, and **Download as Excel**, which
 exports exactly the step you're looking at, every row.
+
+## Design
+
+The look is modelled on [Data Golf](https://datagolf.com): Trebuchet MS,
+dense data-first panels, thin rules, square corners, dark-green section tags
+and a green accent. Icons are simple line drawings, with no emoji. It follows
+your system's light or dark setting.
 
 ## Built for big databases
 

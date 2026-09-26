@@ -24,6 +24,30 @@
 
   const fmt = (n) => Number(n).toLocaleString();
 
+  // Small line icons drawn in SVG (no emoji or symbol fonts).
+  const ICONS = {
+    close: 'M6 6l12 12M18 6L6 18',
+    edit: 'M4 20h4L19 9l-4-4L4 16z',
+    more: 'M5 12h.01M12 12h.01M19 12h.01',
+    plus: 'M12 5v14M5 12h14',
+    chevron: 'M6 9l6 6 6-6',
+    left: 'M15 18l-6-6 6-6',
+    right: 'M9 18l6-6-6-6',
+    up: 'M12 19V5M6 11l6-6 6 6',
+    down: 'M12 5v14M6 13l6 6 6-6',
+    link: 'M7 17L17 7M9 7h8v8',
+  };
+  function icon(name) {
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('class', 'icon-svg' + (name === 'more' ? ' dots' : ''));
+    svg.setAttribute('aria-hidden', 'true');
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', ICONS[name]);
+    svg.append(path);
+    return svg;
+  }
+
   // ---------- floating layer (menus + popovers share one slot) ----------
   let layer = null;
   let layerAnchor = null;
@@ -65,7 +89,7 @@
   // Toggle behaviour for buttons that open a popover.
   function isOpenFor(anchor) { return layer && layerAnchor === anchor; }
 
-  // items: { label, hint, onclick, disabled, icon, badge (Promise<string>) } | '-' | { heading }
+  // items: { label, hint, onclick, disabled, badge (Promise<string>) } | '-' | { heading }
   function menu(anchor, items, title) {
     const list = h('div', { class: 'menu', role: 'menu' });
     if (title) list.append(h('div', { class: 'menu-title' }, title));
@@ -79,7 +103,6 @@
         class: 'menu-item', role: 'menuitem', disabled: it.disabled,
         onclick: () => { closeLayer(); it.onclick(); },
       },
-      h('span', { class: 'menu-icon' }, it.icon || ''),
       h('span', { class: 'menu-label' }, it.label, it.hint ? h('span', { class: 'menu-hint' }, it.hint) : null),
       badge));
     }
@@ -116,7 +139,7 @@
     dialogEl = h('div', { class: 'modal-backdrop', onmousedown: (e) => { if (e.target === dialogEl) closeDialog(); } },
       h('div', { class: 'modal ' + (cls || ''), role: 'dialog', 'aria-label': title },
         h('div', { class: 'modal-head' }, h('h2', null, title),
-          h('button', { class: 'x', title: 'Close', onclick: closeDialog }, '×')),
+          h('button', { class: 'x', title: 'Close', onclick: closeDialog }, icon('close'))),
         h('div', { class: 'modal-body' }, body),
         h('div', { class: 'modal-foot' }, actions)));
     document.body.append(dialogEl);
@@ -147,5 +170,5 @@
   });
   window.addEventListener('resize', closeLayer);
 
-  window.DBXDom = { $, h, fmt, menu, popover, askText, closeLayer, isOpenFor, dialog, closeDialog, toast };
+  window.DBXDom = { $, h, fmt, icon, menu, popover, askText, closeLayer, isOpenFor, dialog, closeDialog, toast };
 })();

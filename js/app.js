@@ -1,7 +1,7 @@
 (function () {
   'use strict';
 
-  const { $, h, fmt, menu, popover, askText, closeLayer, isOpenFor, dialog, closeDialog, toast } = window.DBXDom;
+  const { $, h, fmt, icon, menu, popover, askText, closeLayer, isOpenFor, dialog, closeDialog, toast } = window.DBXDom;
   const P = window.DBXPipeline;
   const { qi } = P;
   const PAGE_SIZE = 100;
@@ -482,7 +482,7 @@
         if (name && name.trim()) { q.name = uniqueQueryName(name.trim()); save(); renderTabs(); }
       },
     }, h('span', { class: 'qtab-name' }, q.name),
-    h('button', { class: 'x', title: 'Close', onclick: () => closeQuery(q.id) }, '×')));
+    h('button', { class: 'x', title: 'Close', onclick: () => closeQuery(q.id) }, icon('close'))));
     tabs.push(h('div', {
       class: 'qtab sql' + (activeId === 'sql' ? ' active' : ''), role: 'tab', onclick: () => setSqlMode(),
     }, h('span', { class: 'qtab-name' }, 'Write SQL')));
@@ -513,9 +513,9 @@
       h('span', { class: 'step-num' }, String(i + 1)),
       h('span', { class: 'step-text' }, P.describe(s), err ? h('span', { class: 'step-error' }, err) : null),
       h('span', { class: 'step-actions' },
-        EDITABLE.has(s.type) ? h('button', { class: 'icon', title: 'Edit this step', onclick: () => editStep(i, li) }, '✎') : null,
-        i > 0 ? h('button', { class: 'icon', title: 'More', onclick: (e) => stepMenu(e.currentTarget, i, li) }, '⋯') : null,
-        i > 0 ? h('button', { class: 'icon x', title: 'Delete this step', onclick: () => deleteStep(i) }, '×') : null));
+        EDITABLE.has(s.type) ? h('button', { class: 'icon', title: 'Edit this step', onclick: () => editStep(i, li) }, icon('edit')) : null,
+        i > 0 ? h('button', { class: 'icon', title: 'More', onclick: (e) => stepMenu(e.currentTarget, i, li) }, icon('more')) : null,
+        i > 0 ? h('button', { class: 'icon x', title: 'Delete this step', onclick: () => deleteStep(i) }, icon('close')) : null));
       return li;
     }));
     $('btn-undo').disabled = !q.undo.length;
@@ -524,13 +524,13 @@
   function stepMenu(anchor, i, li) {
     const q = Q();
     menu(anchor, [
-      EDITABLE.has(q.steps[i].type) ? { icon: '✎', label: 'Edit', onclick: () => editStep(i, li) } : null,
-      { icon: '↑', label: 'Move up', disabled: i <= 1, onclick: () => moveStep(i, -1) },
-      { icon: '↓', label: 'Move down', disabled: i >= q.steps.length - 1, onclick: () => moveStep(i, 1) },
-      { icon: '⧉', label: 'New query from here', hint: 'copy steps 1–' + (i + 1) + ' into a new tab', onclick: () => openQuery(clone(q.steps.slice(0, i + 1)), q.name) },
+      EDITABLE.has(q.steps[i].type) ? { label: 'Edit', onclick: () => editStep(i, li) } : null,
+      { label: 'Move up', disabled: i <= 1, onclick: () => moveStep(i, -1) },
+      { label: 'Move down', disabled: i >= q.steps.length - 1, onclick: () => moveStep(i, 1) },
+      { label: 'New query from here', hint: 'copy steps 1–' + (i + 1) + ' into a new tab', onclick: () => openQuery(clone(q.steps.slice(0, i + 1)), q.name) },
       '-',
-      { icon: '×', label: 'Delete', onclick: () => deleteStep(i) },
-      { icon: '⌫', label: 'Delete this and everything after', onclick: () => { snapshot(q); q.steps.splice(i); q.view = null; q.editing = null; commit(); } },
+      { label: 'Delete', onclick: () => deleteStep(i) },
+      { label: 'Delete this and everything after', onclick: () => { snapshot(q); q.steps.splice(i); q.view = null; q.editing = null; commit(); } },
     ]);
   }
 
@@ -624,7 +624,7 @@
         h('select', { onchange: (e) => { c.op = e.target.value; if (Array.isArray(c.value)) c.value = ''; stepEdited(); renderEditor(); } },
           P.OPERATORS.map((o) => h('option', { value: o.id, selected: o.id === c.op }, o.label))),
         ...inputs,
-        h('button', { class: 'x', title: 'Remove', onclick: () => { s.conditions.splice(k, 1); if (!s.conditions.length) { doneEditing(); return; } stepEdited(); renderEditor(); } }, '×')));
+        h('button', { class: 'x', title: 'Remove', onclick: () => { s.conditions.splice(k, 1); if (!s.conditions.length) { doneEditing(); return; } stepEdited(); renderEditor(); } }, icon('close'))));
     });
     body.append(h('button', { class: 'ghost small', onclick: () => {
       s.conditions.push({ col: cols[0]?.name, op: 'contains', value: '' });
@@ -651,7 +651,7 @@
 
   function groupEditor(body, s, cols) {
     const byTags = s.by.map((name, k) => h('span', { class: 'tag' }, name,
-      h('button', { class: 'x', title: 'Remove', onclick: () => { s.by.splice(k, 1); stepEdited(); renderEditor(); } }, '×')));
+      h('button', { class: 'x', title: 'Remove', onclick: () => { s.by.splice(k, 1); stepEdited(); renderEditor(); } }, icon('close'))));
     body.append(h('div', { class: 'summary-row' },
       h('span', { class: 'label' }, 'Group rows by'), ...byTags,
       colSelect(cols.filter((c) => !s.by.includes(c.name)), '', (v) => { s.by.push(v); stepEdited(); renderEditor(); },
@@ -674,7 +674,7 @@
           onChange(); redraw();
         } }, P.MEASURES.map((d) => h('option', { value: d.id, selected: d.id === m.fn }, d.label))),
         def.needsColumn ? colSelect(cols, m.col, (v) => { m.col = v; onChange(); }) : null,
-        measures.length > 1 ? h('button', { class: 'x', title: 'Remove', onclick: () => { measures.splice(k, 1); onChange(); redraw(); } }, '×') : null));
+        measures.length > 1 ? h('button', { class: 'x', title: 'Remove', onclick: () => { measures.splice(k, 1); onChange(); redraw(); } }, icon('close')) : null));
     });
     body.append(h('button', { class: 'ghost small', onclick: () => {
       measures.push({ fn: 'sum', col: likelyAmount(cols) });
@@ -701,9 +701,9 @@
         h('span', { class: 'label' }, k === 0 ? 'Sort by' : 'then by'),
         colSelect(cols, o.col, (v) => { o.col = v; stepEdited(); }),
         h('select', { onchange: (e) => { o.dir = e.target.value; stepEdited(); } },
-          h('option', { value: 'asc', selected: o.dir !== 'desc' }, 'A → Z, smallest first'),
-          h('option', { value: 'desc', selected: o.dir === 'desc' }, 'Z → A, largest first')),
-        s.by.length > 1 ? h('button', { class: 'x', onclick: () => { s.by.splice(k, 1); stepEdited(); renderEditor(); } }, '×') : null));
+          h('option', { value: 'asc', selected: o.dir !== 'desc' }, 'Ascending (A to Z, smallest first)'),
+          h('option', { value: 'desc', selected: o.dir === 'desc' }, 'Descending (Z to A, largest first)')),
+        s.by.length > 1 ? h('button', { class: 'x', onclick: () => { s.by.splice(k, 1); stepEdited(); renderEditor(); } }, icon('close')) : null));
     });
     body.append(h('button', { class: 'ghost small', onclick: () => { s.by.push({ col: cols[0].name, dir: 'asc' }); stepEdited(); renderEditor(); } }, '+ Then by another column'));
   }
@@ -814,12 +814,12 @@
           pk ? h('span', { class: 'key-badge', title: 'Primary key: click a value to see where it’s used' }, 'PK') : null,
           parent ? h('span', { class: 'key-badge fk', title: `Links to ${parent.table}` }, 'FK') : null,
           h('span', { class: 'th-name' }, c.name),
-          sorted ? h('span', { class: 'arrow' }, sorted.dir === 'desc' ? '↓' : '↑') : null,
+          sorted ? h('span', { class: 'arrow', title: sorted.dir === 'desc' ? 'Sorted descending' : 'Sorted ascending' }, icon(sorted.dir === 'desc' ? 'down' : 'up')) : null,
           parent ? h('button', {
             class: 'expand', title: `Expand ${parent.table}: bring in its columns`,
             onclick: (e) => { e.stopPropagation(); expandPicker(e.currentTarget, P.outgoingLinks([c], schema)[0]); },
-          }, '⤢') : null,
-          h('span', { class: 'caret' }, '▾')));
+          }, icon('plus')) : null,
+          h('span', { class: 'caret' }, icon('chevron'))));
       th.addEventListener('click', () => columnMenu(th, c));
       return th;
     }));
@@ -868,10 +868,10 @@
     const go = (p) => { q.page = p; refresh(); $('grid-wrap').scrollTop = 0; };
     const multi = q.page > 0 || lastPage.more;
     $('pager').replaceChildren(
-      multi ? h('button', { class: 'ghost small', disabled: q.page === 0, onclick: () => go(q.page - 1) }, '← Previous') : '',
+      multi ? h('button', { class: 'ghost small', disabled: q.page === 0, onclick: () => go(q.page - 1) }, 'Previous') : '',
       h('span', { class: 'muted small' }, lastPage.rows
         ? `Showing ${fmt(from)}–${fmt(to)}` + (lastTotal != null ? ` of ${fmt(lastTotal)}` : '') : ''),
-      multi ? h('button', { class: 'ghost small', disabled: !lastPage.more, onclick: () => go(q.page + 1) }, 'Next →') : '');
+      multi ? h('button', { class: 'ghost small', disabled: !lastPage.more, onclick: () => go(q.page + 1) }, 'Next') : '');
   }
 
   function showStopped(retry) {
@@ -921,30 +921,30 @@
     const related = P.relatedFor(col, schema);
     const numeric = P.isNumeric(col.affinity);
     menu(anchor, [
-      { icon: '↑', label: numeric ? 'Sort smallest to largest' : 'Sort A to Z', onclick: () => sortBy(col.name, 'asc') },
-      { icon: '↓', label: numeric ? 'Sort largest to smallest' : 'Sort Z to A', onclick: () => sortBy(col.name, 'desc') },
-      sorted ? { icon: '', label: 'Clear sort', onclick: () => addStep({ type: 'sort', by: [] }, { combine: (prev) => (prev.type === 'sort' ? { type: 'sort', by: [] } : null) }) } : null,
+      { label: numeric ? 'Sort smallest to largest' : 'Sort A to Z', onclick: () => sortBy(col.name, 'asc') },
+      { label: numeric ? 'Sort largest to smallest' : 'Sort Z to A', onclick: () => sortBy(col.name, 'desc') },
+      sorted ? { label: 'Clear sort', onclick: () => addStep({ type: 'sort', by: [] }, { combine: (prev) => (prev.type === 'sort' ? { type: 'sort', by: [] } : null) }) } : null,
       '-',
-      { icon: '☑', label: 'Filter by values…', hint: 'tick the values to keep', onclick: () => valuesFilter(anchor, col) },
-      { icon: 'ƒ', label: numeric ? 'Filter by a range…' : 'Filter by text…', hint: numeric ? 'greater than, between…' : 'contains, starts with…',
+      { label: 'Filter by values…', hint: 'tick the values to keep', onclick: () => valuesFilter(anchor, col) },
+      { label: numeric ? 'Filter by a range…' : 'Filter by text…', hint: numeric ? 'greater than, between…' : 'contains, starts with…',
         onclick: () => addFilter({ col: col.name, op: numeric ? 'gte' : 'contains', value: '' }, true) },
-      { icon: '∅', label: 'Remove empty rows', onclick: () => addFilter({ col: col.name, op: 'notEmpty' }) },
+      { label: 'Remove empty rows', onclick: () => addFilter({ col: col.name, op: 'notEmpty' }) },
       '-',
-      { icon: 'Σ', label: 'Group by this column', hint: 'number of rows for each value', onclick: () => addStep({ type: 'group', by: [col.name], measures: [{ fn: 'count' }] }, { edit: true }) },
-      { icon: '✎', label: 'Rename…', onclick: async () => {
+      { label: 'Group by this column', hint: 'number of rows for each value', onclick: () => addStep({ type: 'group', by: [col.name], measures: [{ fn: 'count' }] }, { edit: true }) },
+      { label: 'Rename…', onclick: async () => {
         const to = await askText(anchor, `Rename “${col.name}” to`, col.name, 'Rename');
         if (to && to.trim() && to.trim() !== col.name) addStep({ type: 'rename', from: col.name, to: to.trim() });
       } },
-      { icon: '✕', label: 'Remove this column', onclick: () => addStep({ type: 'remove', cols: [col.name] },
+      { label: 'Remove this column', onclick: () => addStep({ type: 'remove', cols: [col.name] },
         { combine: (prev) => (prev.type === 'remove' ? { type: 'remove', cols: prev.cols.concat(col.name) } : null) }) },
-      { icon: '◧', label: 'Remove other columns', onclick: () => addStep({ type: 'columns', keep: [col.name] }) },
+      { label: 'Remove other columns', onclick: () => addStep({ type: 'columns', keep: [col.name] }) },
       parent || related.length ? '-' : null,
-      parent ? { icon: '⤢', label: `Expand ${parent.table}…`, hint: 'bring in its columns', onclick: () => expandPicker(anchor, P.outgoingLinks([col], schema)[0]) } : null,
+      parent ? { label: `Expand ${parent.table}…`, hint: 'bring in its columns', onclick: () => expandPicker(anchor, P.outgoingLinks([col], schema)[0]) } : null,
       ...related.slice(0, 8).map((r) => ({
-        icon: '#', label: `Count matching ${r.table}`, hint: `adds a column: how many ${r.table} rows have this ${r.column}`,
+        label: `Count matching ${r.table}`, hint: `adds a column: how many ${r.table} rows have this ${r.column}`,
         onclick: () => addStep({ type: 'lookup', source: { table: r.table }, on: [[col.name, r.column]], measures: [{ fn: 'count' }] }),
       })),
-      related.length ? { icon: '+', label: 'Add other figures from a related table…', onclick: () => combineDialog('lookup', null, { col: col.name, related: related[0] }) } : null,
+      related.length ? { label: 'Add other figures from a related table…', onclick: () => combineDialog('lookup', null, { col: col.name, related: related[0] }) } : null,
     ], col.name);
   }
 
@@ -980,7 +980,7 @@
     const shown = () => found || top;
 
     const draw = () => {
-      sortBtn.textContent = sortMode === 'count' ? 'Most common first' : 'A → Z';
+      sortBtn.textContent = sortMode === 'count' ? 'Most common first' : 'A to Z';
       const items = shown().slice().sort(sortMode === 'count' ? (a, b) => b.n - a.n
         : (a, b) => display(a.v).localeCompare(display(b.v), undefined, { numeric: true }));
       all.checked = items.length > 0 && items.every((en) => en.checked);
@@ -1149,17 +1149,17 @@
     const dateLike = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value);
     const items = [];
     if (isNull) {
-      items.push({ icon: '=', label: 'Keep only empty', onclick: () => addFilter({ col: col.name, op: 'eq', value: null }) });
-      items.push({ icon: '≠', label: 'Remove empty', onclick: () => addFilter({ col: col.name, op: 'ne', value: null }) });
+      items.push({ label: 'Keep only empty', onclick: () => addFilter({ col: col.name, op: 'eq', value: null }) });
+      items.push({ label: 'Remove empty', onclick: () => addFilter({ col: col.name, op: 'ne', value: null }) });
     } else if (!(value && value.$blob != null)) {
-      items.push({ icon: '=', label: 'Keep only this value', onclick: () => addFilter({ col: col.name, op: 'eq', value }) });
-      items.push({ icon: '≠', label: 'Remove this value', onclick: () => addFilter({ col: col.name, op: 'ne', value }) });
+      items.push({ label: 'Keep only this value', onclick: () => addFilter({ col: col.name, op: 'eq', value }) });
+      items.push({ label: 'Remove this value', onclick: () => addFilter({ col: col.name, op: 'ne', value }) });
       if (numeric || dateLike) {
-        items.push({ icon: '≥', label: dateLike ? 'Keep this date or later' : 'Keep this or more', onclick: () => addFilter({ col: col.name, op: 'gte', value }) });
-        items.push({ icon: '≤', label: dateLike ? 'Keep this date or earlier' : 'Keep this or less', onclick: () => addFilter({ col: col.name, op: 'lte', value }) });
+        items.push({ label: dateLike ? 'Keep this date or later' : 'Keep this or more', onclick: () => addFilter({ col: col.name, op: 'gte', value }) });
+        items.push({ label: dateLike ? 'Keep this date or earlier' : 'Keep this or less', onclick: () => addFilter({ col: col.name, op: 'lte', value }) });
       }
       if (typeof value === 'string') {
-        items.push({ icon: '…', label: 'Keep values containing…', onclick: () => addFilter({ col: col.name, op: 'contains', value }, true) });
+        items.push({ label: 'Keep values containing…', onclick: () => addFilter({ col: col.name, op: 'contains', value }, true) });
       }
     }
 
@@ -1169,11 +1169,11 @@
       const related = P.relatedFor(col, schema);
       if (parent || related.length) items.push('-', { heading: `Follow ${shown}` });
       if (parent) {
-        items.push({ icon: '↗', label: `Open the ${parent.table} record`, hint: `${parent.column} = ${shown}`, onclick: () => inspect(parent.table, parent.column, value) });
+        items.push({ label: `Open the ${parent.table} record`, hint: `${parent.column} = ${shown}`, onclick: () => inspect(parent.table, parent.column, value) });
       }
       related.slice(0, 10).forEach((r, k) => {
         items.push({
-          icon: '⇢', label: `Find in ${r.table}`, hint: `where ${r.column} = ${shown}`,
+          label: `Find in ${r.table}`, hint: `where ${r.column} = ${shown}`,
           badge: cappedCount(r.table, r.column, value, 'menu' + k), badgeText: '…',
           onclick: () => openQuery([{ type: 'source', table: r.table },
             { type: 'filter', match: 'all', conditions: [{ col: r.column, op: 'eq', value }] }], `${r.table} · ${r.column} = ${display(value, 20)}`),
@@ -1186,24 +1186,25 @@
     const anyKey = keyCol >= 0 ? keyCol : cols.findIndex((c) => c.prov && P.primaryKey(c.prov.table, schema) === c.prov.column);
     if (anyKey >= 0 && row[anyKey] != null) {
       const kc = cols[anyKey];
-      items.push('-', { icon: '◎', label: `Inspect this ${kc.prov.table} record`, hint: 'all its fields and linked records', onclick: () => inspect(kc.prov.table, kc.prov.column, row[anyKey]) });
+      items.push('-', { label: `Inspect this ${kc.prov.table} record`, hint: 'all its fields and linked records', onclick: () => inspect(kc.prov.table, kc.prov.column, row[anyKey]) });
     }
-    items.push('-', { icon: '⧉', label: 'Copy value', disabled: isNull, onclick: () => navigator.clipboard.writeText(display(value)).then(() => toast('Copied')) });
+    items.push('-', { label: 'Copy value', disabled: isNull, onclick: () => navigator.clipboard.writeText(display(value)).then(() => toast('Copied')) });
     menu(td, items, `${col.name} = ${shown}`);
   }
 
   // ---------- choose / expand columns ----------
-  function checklist(names, checked, labelFor) {
+  function checklist(names, checked, labelFor, onChange) {
     const state = new Map(names.map((n) => [n, checked(n)]));
+    const changed = () => { if (onChange) onChange(names.filter((n) => state.get(n))); };
     const search = h('input', { type: 'search', placeholder: 'Find a column…', oninput: () => draw() });
     const list = h('div', { class: 'check-list' });
     const draw = () => {
       const s = search.value.trim().toLowerCase();
       list.replaceChildren(...names.filter((n) => n.toLowerCase().includes(s)).map((n) => h('label', { class: 'check' },
-        h('input', { type: 'checkbox', checked: state.get(n), onchange: (e) => state.set(n, e.target.checked) }),
+        h('input', { type: 'checkbox', checked: state.get(n), onchange: (e) => { state.set(n, e.target.checked); changed(); } }),
         h('span', null, labelFor ? labelFor(n) : n))));
     };
-    const setAll = (v) => { names.forEach((n) => state.set(n, v)); draw(); };
+    const setAll = (v) => { names.forEach((n) => state.set(n, v)); draw(); changed(); };
     draw();
     const el = h('div', null,
       h('div', { class: 'row' }, search,
@@ -1265,7 +1266,7 @@
     const links = P.outgoingLinks(compileView(q).cols || [], schema);
     if (!links.length) return toast('Nothing here links to another table (no foreign keys). Try Merge instead.');
     menu(anchor, links.map((l) => ({
-      icon: '⤢', label: l.table, hint: `via ${l.pairs.map((p) => p[0]).join(', ')}`,
+      label: l.table, hint: `via ${l.pairs.map((p) => p[0]).join(', ')}`,
       onclick: () => expandPicker(anchor, l),
     })), 'Expand a linked table');
   }
@@ -1283,7 +1284,9 @@
       source: existing ? srcKey(existing.source) : preset ? 't:' + preset.related.table : '',
       on: existing ? existing.on : preset ? [[preset.col, preset.related.column]] : [],
       kind: existing?.kind || 'left',
-      columns: existing?.columns || null,
+      columns: existing?.columns || null,     // other table's columns to bring in (null = default)
+      leftColumns: existing?.leftColumns ?? null, // this query's columns to keep (null = all)
+      note: '',
       prefix: existing ? existing.prefix !== '' : true,
       measures: existing?.measures || [{ fn: 'count' }],
     };
@@ -1312,6 +1315,8 @@
         st.on = P.suggestMatches(left, rightCols(), schema, src.table).slice(0, 1);
         if (!st.on.length && left.length && rightCols().length) st.on = [[left[0].name, rightCols()[0].name]];
         st.columns = null;
+        st.leftColumns = null;
+        st.note = '';
         draw();
       } },
       h('option', { value: '', disabled: true, selected: !st.source }, 'choose…'),
@@ -1327,7 +1332,7 @@
           colSelect(left, pair[0], (v) => { pair[0] = v; draw(); }, 'column here…'),
           h('span', { class: 'eq' }, '='),
           colSelect(rc, pair[1], (v) => { pair[1] = v; draw(); }, 'column there…'),
-          st.on.length > 1 ? h('button', { class: 'x', onclick: () => { st.on.splice(k, 1); draw(); } }, '×') : null)));
+          st.on.length > 1 ? h('button', { class: 'x', onclick: () => { st.on.splice(k, 1); draw(); } }, icon('close')) : null)));
         const sugg = P.suggestMatches(left, rc, schema, parseSrc(st.source).table);
         parts.push(h('div', { class: 'field' }, h('label', null, 'Match rows where'), pairs,
           h('div', { class: 'row' },
@@ -1341,15 +1346,45 @@
         const kinds = P.JOIN_KINDS.filter((k) => !k.minSqlite || sqliteAtLeast(k.minSqlite));
         parts.push(h('div', { class: 'field' }, h('label', null, 'Keep'),
           h('div', { class: 'kinds' }, kinds.map((k) => h('label', { class: 'kind' + (st.kind === k.id ? ' on' : '') },
-            h('input', { type: 'radio', name: 'kind', checked: st.kind === k.id, onchange: () => { st.kind = k.id; draw(); } }),
+            h('input', { type: 'radio', name: 'kind', checked: st.kind === k.id, onchange: () => { st.kind = k.id; st.note = ''; draw(); } }),
             h('span', null, h('strong', null, k.label), h('span', { class: 'muted small' }, k.hint)))))));
         if (st.kind !== 'anti') {
           const matched = new Set(st.on.map((p) => p[1]));
-          const names = rc.map((c) => c.name);
-          const pick = checklist(names, (n) => (st.columns ? st.columns.includes(n) : !matched.has(n)));
-          st.pick = pick;
+          const rightNames = rc.map((c) => c.name);
+          const leftNames = left.map((c) => c.name);
+          if (!st.columns) st.columns = rightNames.filter((n) => !matched.has(n));
+          const keptLeft = st.leftColumns ?? leftNames;
           const srcName = P.sourceName(parseSrc(st.source));
-          parts.push(h('div', { class: 'field' }, h('label', null, 'Columns to bring in'), pick.el,
+          const which = !keptLeft.length ? 'right' : !st.columns.length ? 'left' : 'both';
+          const shortcut = (id, label, apply) => h('button', {
+            class: 'seg' + (which === id ? ' on' : ''), type: 'button',
+            onclick: () => { apply(); draw(); },
+          }, label);
+          const leftPick = checklist(leftNames, (n) => keptLeft.includes(n), null,
+            (sel) => { st.leftColumns = sel.length === leftNames.length ? null : sel; });
+          const rightPick = checklist(rightNames, (n) => st.columns.includes(n), null,
+            (sel) => { st.columns = sel; });
+          parts.push(h('div', { class: 'field' }, h('label', null, 'Keep columns from'),
+            h('div', { class: 'segmented' },
+              shortcut('both', 'Both', () => { st.leftColumns = null; st.columns = rightNames.filter((n) => !matched.has(n)); st.note = ''; }),
+              shortcut('right', `Only ${srcName}`, () => {
+                st.leftColumns = [];
+                st.columns = rightNames.slice();
+                st.prefix = false;
+                if (st.kind === 'left') {
+                  st.kind = 'inner';
+                  st.note = `Switched to “Only rows that match”, so rows here with no ${srcName} don’t leave empty rows.`;
+                }
+              }),
+              shortcut('left', 'Only this query', () => {
+                st.leftColumns = null;
+                st.columns = [];
+                st.note = st.kind === 'inner' ? 'This keeps rows here that have a match, without adding any columns.' : '';
+              })),
+            st.note ? h('p', { class: 'muted small' }, st.note) : null,
+            h('div', { class: 'two-lists' },
+              h('div', null, h('div', { class: 'list-title' }, `This query (${keptLeft.length} of ${leftNames.length})`), leftPick.el),
+              h('div', null, h('div', { class: 'list-title' }, `${srcName} (${st.columns.length} of ${rightNames.length})`), rightPick.el)),
             h('label', { class: 'check' },
               h('input', { type: 'checkbox', checked: st.prefix, onchange: (e) => { st.prefix = e.target.checked; } }),
               h('span', { class: 'small' }, `Start new column names with “${srcName}.”`))));
@@ -1399,7 +1434,8 @@
           const of = n < 1000 ? `${fmt(n)} rows here` : `the first ${fmt(n)} rows here`;
           check.textContent = n === 0 ? 'There are no rows here yet.'
             : m === 0 ? `None of ${of} find a match. Check the columns.`
-              : m === n ? `All ${of.replace('the first ', '')} find a match.` : `${fmt(m)} of ${of} find a match.`;
+              : n === 1 ? (m ? 'The 1 row here finds a match.' : 'The 1 row here has no match.')
+                : m === n ? `All ${of.replace('the first ', '')} find a match.` : `${fmt(m)} of ${of} find a match.`;
         } catch (e) {
           if (!(e instanceof CancelledError)) { check.className = 'match-check small bad'; check.textContent = e.message; }
         }
@@ -1416,7 +1452,11 @@
         if (!on.length) return toast('Choose which columns to match on.', true);
         if (mode === 'merge') {
           step = { type: 'merge', source, kind: st.kind, on };
-          if (st.kind !== 'anti') step.columns = st.pick.selected();
+          if (st.kind !== 'anti') {
+            step.columns = st.columns || [];
+            if (st.leftColumns) step.leftColumns = st.leftColumns;
+            if (!step.columns.length && step.leftColumns && !step.leftColumns.length) return toast('Choose at least one column to keep.', true);
+          }
           if (!st.prefix) step.prefix = '';
         } else {
           step = { type: 'lookup', source, on, measures: st.measures };
@@ -1465,10 +1505,10 @@
     const body = h('div', { class: 'insp-body' }, h('p', { class: 'muted pad' }, 'Loading…'));
     el.replaceChildren(
       h('div', { class: 'insp-head' },
-        h('button', { class: 'icon', title: 'Back', disabled: insp.index <= 0, onclick: () => go(-1) }, '←'),
-        h('button', { class: 'icon', title: 'Forward', disabled: insp.index >= insp.history.length - 1, onclick: () => go(1) }, '→'),
+        h('button', { class: 'icon', title: 'Back', disabled: insp.index <= 0, onclick: () => go(-1) }, icon('left')),
+        h('button', { class: 'icon', title: 'Forward', disabled: insp.index >= insp.history.length - 1, onclick: () => go(1) }, icon('right')),
         h('div', { class: 'insp-title' }, h('strong', null, table), h('span', { class: 'muted small' }, `${column} = ${shown}`)),
-        h('button', { class: 'icon x', title: 'Close', onclick: closeInspector }, '×')),
+        h('button', { class: 'icon x', title: 'Close', onclick: closeInspector }, icon('close'))),
       h('div', { class: 'insp-actions' },
         h('button', { class: 'ghost small', onclick: () => openQuery([{ type: 'source', table },
           { type: 'filter', match: 'all', conditions: [{ col: column, op: 'eq', value }] }], `${table} · ${column} = ${display(value, 20)}`) }, 'Open as a query')),
@@ -1488,7 +1528,7 @@
       const v = row[k];
       const parent = v != null ? P.parentOf({ prov: { table, column: name } }, schema) : null;
       return h('tr', null, h('th', null, name), h('td', { class: v == null ? 'null' : typeof v === 'number' ? 'num' : '' },
-        parent ? h('button', { class: 'link', title: `Open ${parent.table} record`, onclick: () => inspect(parent.table, parent.column, v) }, display(v, 120), ' ↗') : display(v, 300)));
+        parent ? h('button', { class: 'link', title: `Open ${parent.table} record`, onclick: () => inspect(parent.table, parent.column, v) }, display(v, 120), icon('link')) : display(v, 300)));
     }));
     const sections = [];
     if (rec.more) sections.push(h('p', { class: 'muted small' }, `More than one record has ${column} = ${shown}; showing the first.`));
