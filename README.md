@@ -20,20 +20,50 @@ python3 dbexplorer.py ~/Documents/sales.sqlite
 Needs only Python 3.8+ (standard library). Nothing to install. Nothing leaves
 your machine: the server listens on 127.0.0.1 only.
 
-## What it does
+## How it works
 
-- **Browse** every table and view, with row counts.
-- **Columns**: choose which to show.
-- **Filters**: contains, is exactly, starts with, greater than, between,
-  is one of, is empty… (match all or any). Suggestions appear as you type.
-- **Link related data**: follow the database's foreign keys to pull in columns
-  from other tables (e.g. order items → orders → customers).
-- **Summarise**: group rows and show counts, totals, averages, min/max.
-- **Sort** by clicking a column heading.
-- **Show SQL** reveals the query it built; **Write SQL** is there for anyone
-  who wants it.
-- **Download as Excel** exports the full result (not just the page on screen);
-  **Export all tables** puts every table on its own sheet.
+It's built like Power Query. Every change you make becomes a step in
+**Applied steps** on the right, such as *Source: orders → Merged with
+customers → Filtered: status = shipped → Sorted by date ↓*. Click a step to see
+the data at that point, edit it (✎), move it, or delete it. Steps apply in
+order, so a filter after a Group by filters the groups. **Undo** (⌘Z) steps
+back. Queries open as tabs and are remembered for each database.
+
+**Click the data instead of building filters.**
+
+- **Click any cell:** *Keep only this value*, *Remove this value*,
+  *Keep this or more / less* (numbers and dates), *Keep values containing…*.
+- **Click a key and follow it.** A primary key instantly lists every table
+  that uses it, with live row counts: *Find in order_items where
+  order_id = 5 (3 rows)* opens those rows in a new tab. A foreign key opens
+  its parent record.
+- **Record inspector:** see one record's fields plus every linked record
+  elsewhere. Click through the chain (customer → orders → items → product)
+  with back/forward, like browsing.
+- **Click a column heading:** sort, *Filter by values…* (an Excel-style tick
+  list with counts), remove empty rows, group by, rename, remove, and for key
+  columns *Expand* (bring in the linked table's columns, ⤢) or *Count
+  matching …*.
+
+The typed filters are still there (contains, between, is one of…) for when
+you need them.
+
+**Combining tables:**
+
+- **Merge**: join another table *or another open query*. Matching columns are
+  suggested from foreign keys and names, and it checks how many rows find a
+  match before you commit. Choose how to keep rows: all rows here, only
+  matching rows, only rows with no match (e.g. customers who never ordered),
+  or all rows from both.
+- **Add figures**: add a count, total, average, min or max from matching rows
+  in a related table, one figure per row. Rows are never duplicated.
+- **Append**: stack another table or query underneath, matching columns by
+  name.
+- **Expand linked**: follow a foreign key and pick columns to bring in.
+
+Also: **Group by**, **Remove duplicates**, **Keep top rows**, **Choose
+columns**, **Show SQL** / **Write SQL**, and **Download as Excel**, which
+exports exactly the step you're looking at, every row.
 
 ## Built for big databases
 
@@ -44,6 +74,11 @@ on disk, and the page only receives the 100 rows on screen.
   Row counts (which need a full scan) run separately in the background.
 - **Nothing queues up.** If you change a filter while a slow sort or count is
   running, the old query is interrupted rather than finished.
+- **You can see what's running.** Anything that takes more than half a second
+  shows in an activity bar ("Summarising… 4.2s") with a Cancel button that
+  stops it in the database. (SQLite can't say how far through a query it is,
+  so this shows time taken rather than a percentage; exports, where the total
+  is known, show a real progress bar.)
 - **Exports stream to disk** row by row, with a progress bar and Cancel.
   Memory use stays flat whatever the size. Results beyond Excel's
   1,048,575-row limit continue on extra sheets (`orders`, `orders (2)`, …).
@@ -90,7 +125,8 @@ itself, not to other websites.
 ## Development
 
 ```bash
-python3 -m unittest discover tests             # openpyxl, if installed, adds Excel round-trip checks
+python3 -m unittest discover tests             # server + Excel writer (openpyxl, if installed, adds round-trip checks)
+node --test                                    # query engine: steps -> SQL, run against the sample database
 python3 scripts/make_sample.py                 # rebuild examples/sample.sqlite
 python3 scripts/make_sample.py --big 4000000 /tmp/big.sqlite   # ~10M-row test database
 ```
@@ -98,5 +134,6 @@ python3 scripts/make_sample.py --big 4000000 /tmp/big.sqlite   # ~10M-row test d
 - `dbexplorer.py`: local server that opens databases, runs queries, runs exports
 - `xlsx_writer.py`: streaming, typed Excel writer
 - `index.html`, `css/`, `js/app.js`: the interface
-- `js/query.js`: turns the point-and-click choices into SQL (values are always bound parameters)
+- `js/pipeline.js`: the query engine; turns applied steps into SQL and knows the relationships between tables (values are always bound parameters)
+- `js/dom.js`: small UI toolkit (menus, popovers, dialogs)
 - `examples/sample.sqlite`: demo database full of values spreadsheets like to mangle

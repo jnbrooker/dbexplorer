@@ -52,26 +52,33 @@
     </aside>
 
     <section class="main">
-      <div class="tabs" role="tablist">
-        <button id="tab-explore" class="tab active" role="tab">Explore</button>
-        <button id="tab-sql" class="tab" role="tab">Write SQL <span class="muted">(advanced)</span></button>
-      </div>
+      <div id="query-tabs" class="query-tabs" role="tablist"></div>
 
-      <div id="explore-panel" class="panel">
-        <div class="builder-head">
-          <h2 id="table-title"></h2>
-          <span id="table-meta" class="muted"></span>
+      <div id="explore-panel" class="explore">
+        <div class="toolbar" role="toolbar">
+          <div class="tool-group">
+            <span class="tool-label">Columns</span>
+            <button id="t-columns" class="tool">Choose</button>
+            <button id="t-link" class="tool" title="Bring in columns from a table this one links to">Expand linked</button>
+          </div>
+          <div class="tool-group">
+            <span class="tool-label">Rows</span>
+            <button id="t-filter" class="tool">Filter</button>
+            <button id="t-distinct" class="tool">Remove duplicates</button>
+            <button id="t-top" class="tool">Keep top</button>
+          </div>
+          <div class="tool-group">
+            <span class="tool-label">Transform</span>
+            <button id="t-group" class="tool">Group by</button>
+          </div>
+          <div class="tool-group">
+            <span class="tool-label">Combine</span>
+            <button id="t-merge" class="tool" title="Join another table or query on matching columns">Merge</button>
+            <button id="t-lookup" class="tool" title="Add a count, total or average from a related table, one per row">Add figures</button>
+            <button id="t-append" class="tool" title="Stack another table or query underneath">Append</button>
+          </div>
         </div>
-        <div class="builder-bar">
-          <button id="btn-columns" class="chip">Columns</button>
-          <button id="btn-add-filter" class="chip">+ Filter</button>
-          <button id="btn-links" class="chip">+ Link related data</button>
-          <label class="chip toggle"><input type="checkbox" id="summary-toggle"> Summarise</label>
-          <button id="btn-reset" class="ghost small">Start over</button>
-        </div>
-        <div id="joins" class="joins"></div>
-        <div id="filters" class="filters"></div>
-        <div id="summary" class="summary" hidden></div>
+        <div id="step-editor" class="step-editor" hidden></div>
       </div>
 
       <div id="sql-panel" class="panel" hidden>
@@ -83,24 +90,42 @@
       </div>
 
       <div class="results">
+        <div id="view-banner" class="view-banner" hidden></div>
         <div class="results-bar">
           <span id="result-count" class="result-count"></span>
           <span class="spacer"></span>
+          <span class="muted small hint-inline">Click a cell or a column heading for options</span>
           <button id="btn-show-sql" class="ghost small">Show SQL</button>
           <button id="btn-export" class="primary">Download as Excel</button>
         </div>
         <div id="sql-preview" class="sql-preview" hidden>
           <pre id="sql-preview-text"></pre>
-          <button id="btn-edit-sql" class="ghost small">Edit in “Write SQL”</button>
+          <button id="btn-edit-sql" class="ghost small">Edit as SQL</button>
+        </div>
+        <div id="activity" class="activity" role="status" hidden>
+          <div class="progress indeterminate"><div class="bar"></div></div>
+          <span id="activity-text" class="small"></span>
+          <button id="btn-activity-cancel" class="ghost small">Cancel</button>
         </div>
         <p id="result-error" class="error" hidden></p>
         <div id="grid-wrap" class="grid-wrap"><table id="grid" class="grid"></table></div>
         <div id="pager" class="pager"></div>
       </div>
     </section>
+
+    <aside id="steps-panel" class="steps-panel">
+      <div class="steps-head">
+        <h2>Applied steps</h2>
+        <button id="btn-undo" class="ghost small" title="Undo the last change (⌘Z)">Undo</button>
+        <button id="btn-duplicate" class="ghost small" title="Copy this query into a new tab">Duplicate</button>
+      </div>
+      <ol id="steps" class="steps"></ol>
+      <p class="muted small steps-tip">Click a step to see the data at that point. New steps go after the one selected.</p>
+    </aside>
   </div>
 
-  <div id="popover" class="popover" hidden></div>
+  <aside id="inspector" class="inspector" hidden aria-label="Record inspector"></aside>
+
   <div id="export-panel" class="export-panel" role="status" hidden>
     <div class="row">
       <strong>Exporting to Excel</strong>
@@ -112,7 +137,8 @@
   </div>
   <div id="toast" class="toast" role="status" hidden></div>
 
-  <script src="js/query.js"></script>
+  <script src="js/dom.js"></script>
+  <script src="js/pipeline.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>

@@ -176,7 +176,23 @@ def encode_value(v):
     return v
 
 
+def decode_params(params):
+    """Values the page picked from cells come back in the same wrapped form
+    they were sent in; turn them back into real values for binding."""
+    out = []
+    for p in params:
+        if isinstance(p, dict) and "$int" in p:
+            p = int(p["$int"])
+        elif isinstance(p, dict) and "$text" in p:
+            p = str(p["$text"])
+        elif isinstance(p, (dict, list)):
+            raise ValueError("Unsupported parameter")
+        out.append(p)
+    return out
+
+
 def run_query(db_id, key, sql, params, limit):
+    params = decode_params(params)
     slot = get_slot(db_id, key)
     with slot.meta:
         slot.generation += 1
@@ -231,7 +247,7 @@ def run_export(job):
             writer = XlsxWriter(f)
             for sheet in job["sheets"]:
                 job["sheet"] = sheet["name"]
-                cur = conn.execute(sheet["sql"], sheet.get("params") or [])
+                cur = conn.execute(sheet["sql"], decode_params(sheet.get("params") or []))
                 if cur.description is None:
                     raise ValueError("That query doesn't return any rows to export")
                 columns = sheet.get("columns") or [d[0] for d in cur.description]
@@ -347,6 +363,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 limit = max(1, min(int(body.get("limit") or 100), MAX_PAGE_ROWS))
                 result = run_query(body.get("id"), key, body["sql"], body.get("params") or [], limit)
                 return self.send_json(200, result)
+            if route == "api/cancel":
+                # Stop running queries (the page's Cancel button). Interrupting
+                # an idle connection does nothing.
+                for key in body.get("keys") or []:
+                    slot = SLOTS.get((body.get("id"), str(key)))
+                    if slot:
+                        slot.conn.interrupt()
+                return self.send_json(200, {"ok": True})
             if route == "api/export":
                 return self.start_export(body)
             m = re.fullmatch(r"api/export/(\w+)/cancel", route)
@@ -377,7 +401,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         db_id = secrets.token_hex(8)
         DATABASES[db_id] = path
         self.send_json(200, {"id": db_id, "path": path, "name": os.path.basename(path),
-                             "size": os.path.getsize(path), "tables": tables})
+                             "size": os.path.getsize(path), "tables": tables,
+                             "sqliteVersion": sqlite3.sqlite_version})
 
     def start_export(self, body):
         path = DATABASES.get(body.get("id"))

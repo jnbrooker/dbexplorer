@@ -1,46 +1,46 @@
 (function () {
   'use strict';
 
-  const { qi, affinity, OPERATORS, MEASURES, availableColumns, availableLinks, build } = window.DBXQuery;
+  const { $, h, fmt, menu, popover, askText, closeLayer, isOpenFor, dialog, closeDialog, toast } = window.DBXDom;
+  const P = window.DBXPipeline;
+  const { qi } = P;
   const PAGE_SIZE = 100;
   const SQL_PREVIEW_ROWS = 500;
-  const $ = (id) => document.getElementById(id);
+  const VALUES_SAMPLE = 200000;
+  const COUNT_CAP = 10000;
 
-  // ---------- tiny DOM helper ----------
-  function h(tag, attrs, ...children) {
-    const el = document.createElement(tag);
-    if (attrs) {
-      for (const [k, v] of Object.entries(attrs)) {
-        if (v == null || v === false) continue;
-        if (k === 'class') el.className = v;
-        else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
-        else if (k in el && k !== 'list') el[k] = v;
-        else el.setAttribute(k, v === true ? '' : v);
-      }
-    }
-    for (const c of children.flat()) {
-      if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
-    }
-    return el;
-  }
-  const fmt = (n) => Number(n).toLocaleString();
   const fmtBytes = (n) => {
     const units = ['bytes', 'KB', 'MB', 'GB', 'TB'];
     let i = 0;
     while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
     return `${i ? n.toFixed(1) : n} ${units[i]}`;
   };
+  const clone = (x) => JSON.parse(JSON.stringify(x));
+
+  // Display form of a cell value (values arrive as JSON; big integers and
+  // odd values are wrapped by the server so nothing is lost).
+  function display(v, max) {
+    if (v === null || v === undefined) return '(empty)';
+    if (typeof v === 'object') return v.$int ?? v.$text ?? (v.$blob != null ? `[binary, ${fmt(v.$blob)} bytes]` : '');
+    const s = String(v);
+    return max && s.length > max ? s.slice(0, max - 1) + '…' : s;
+  }
 
   // ---------- app state ----------
-  let db = null; // { id, path, name, size }
+  let db = null; // { id, path, name, size, sqliteVersion }
   let schema = null;
-  let current = null; // selected table name
-  let mode = 'explore';
-  let page = 0;
-  let sqlShown = false;
   let samplePath = null;
-  const tableStates = new Map();
-  const S = () => tableStates.get(current);
+  let queries = []; // { id, name, steps, view (step index or null = last), page, editing, undo: [] }
+  let activeId = null; // a query id, or 'sql'
+  let sqlShown = false;
+  const countCache = new Map();
+
+  const Q = () => queries.find((q) => q.id === activeId) || null;
+  const ctxFor = (q) => ({ self: q.id, resolveQuery: (id) => queries.find((x) => x.id === id) });
+  const viewIndex = (q) => (q.view == null ? q.steps.length - 1 : Math.min(q.view, q.steps.length - 1));
+  const compileView = (q) => P.compile(q.steps, schema, viewIndex(q), ctxFor(q));
+  const colsBefore = (q, index) => (index <= 0 ? [] : P.compile(q.steps, schema, index - 1, ctxFor(q)).cols || []);
+  const sourceTable = (q) => q.steps[0] && q.steps[0].table;
 
   // ---------- server ----------
   class CancelledError extends Error {}
@@ -61,21 +61,75 @@
 
   // Each `key` has its own connection on the server; a new query with the same
   // key interrupts the previous one (e.g. the user changed a filter mid-count).
-  function query(sql, params, key, limit) {
-    return api('query', { id: db.id, sql, params: params || [], key, limit: limit || PAGE_SIZE });
+  // With a label, the query shows in the activity bar while it runs.
+  function query(sql, params, key, limit, label) {
+    const p = api('query', { id: db.id, sql, params: params || [], key, limit: limit || PAGE_SIZE });
+    return label ? track(key, label, p) : p;
+  }
+
+  // ---------- activity bar: what's running, for how long, and a Cancel ----------
+  // SQLite can't say how far through a query it is, so this shows what's
+  // happening and the time taken rather than a percentage.
+  const activity = new Map(); // key -> { label, start, token }
+  const userCancelled = new Set();
+  let activityTimer = null;
+
+  function track(key, label, promise) {
+    const token = {};
+    activity.set(key, { label, start: performance.now(), token });
+    userCancelled.delete(key);
+    renderActivity();
+    return promise.finally(() => {
+      if (activity.get(key)?.token === token) activity.delete(key);
+      renderActivity();
+    });
+  }
+
+  function renderActivity() {
+    clearTimeout(activityTimer);
+    const bar = $('activity');
+    if (!activity.size) { bar.hidden = true; return; }
+    const now = performance.now();
+    const items = [...activity.values()];
+    const oldest = Math.min(...items.map((a) => a.start));
+    if (now - oldest > 400) {
+      const labels = [...new Set(items.map((a) => a.label))];
+      $('activity-text').textContent = `${labels.join(' · ')}… ${((now - oldest) / 1000).toFixed(1)}s`;
+      bar.hidden = false;
+    }
+    activityTimer = setTimeout(renderActivity, 100);
+  }
+
+  function cancelActivity() {
+    const keys = [...activity.keys()];
+    if (!keys.length || !db) return;
+    keys.forEach((k) => userCancelled.add(k));
+    api('cancel', { id: db.id, keys }).catch(() => {});
+  }
+
+  // What the page query is mostly doing, for the activity bar.
+  function workLabel(q) {
+    const types = new Set(q.steps.slice(0, viewIndex(q) + 1).map((s) => s.type));
+    if (types.has('group') || types.has('lookup')) return 'Summarising';
+    if (types.has('merge') || types.has('append') || types.has('link')) return 'Combining tables';
+    if (types.has('sort')) return 'Sorting';
+    if (types.has('filter')) return 'Filtering';
+    return 'Loading rows';
+  }
+
+  // "12 rows" / "10,000+ rows", reading at most COUNT_CAP + 1 matches.
+  async function cappedCount(table, column, value, key) {
+    const r = await query(`SELECT COUNT(*) FROM (SELECT 1 FROM ${qi(table)} WHERE ${qi(column)} = ? LIMIT ${COUNT_CAP + 1})`, [value], key, 1);
+    const n = r.rows[0][0];
+    return n > COUNT_CAP ? `${fmt(COUNT_CAP)}+ rows` : `${fmt(n)} ${n === 1 ? 'row' : 'rows'}`;
   }
 
   function schemaFrom(tables) {
     const out = {};
     for (const t of tables) {
       out[t.name] = {
-        name: t.name,
-        type: t.type,
-        columns: t.columns.map((c) => ({ ...c, affinity: affinity(c.type) })),
-        rawFks: t.fks,
-        fks: [],
-        rowCount: null,
-        estimate: t.estimate,
+        name: t.name, type: t.type, rawFks: t.fks, fks: [], rowCount: null, estimate: t.estimate,
+        columns: t.columns.map((c) => ({ ...c, affinity: P.affinity(c.type) })),
       };
     }
     // Resolve foreign keys now that every table is known (names are case-insensitive in SQLite).
@@ -99,51 +153,206 @@
     return { tables: out };
   }
 
-  function newState(table) {
-    return {
-      table,
-      joins: [],
-      nextAlias: 1,
-      columns: schema.tables[table].columns.map((c) => ({ key: 't0.' + c.name, visible: true })),
-      filters: [],
-      match: 'all',
-      sort: null,
-      summary: { on: false, groupBy: [], measures: [{ fn: 'count', key: null }] },
-    };
+  const sqliteAtLeast = (v) => {
+    const have = String(db.sqliteVersion || '0').split('.').map(Number);
+    return have[0] > v[0] || (have[0] === v[0] && have[1] >= v[1]);
+  };
+
+  // ---------- queries ----------
+  const newId = () => 'q' + Math.random().toString(36).slice(2, 9);
+
+  function uniqueQueryName(name) {
+    let n = name;
+    for (let i = 2; queries.some((q) => q.name === n); i++) n = `${name} (${i})`;
+    return n;
+  }
+
+  function openQuery(steps, name) {
+    const q = { id: newId(), name: uniqueQueryName(name), steps, view: null, page: 0, editing: null, undo: [] };
+    queries.push(q);
+    activate(q.id);
+    return q;
+  }
+
+  function openTable(table) {
+    const pristine = queries.find((q) => q.steps.length === 1 && q.steps[0].table === table);
+    if (pristine) activate(pristine.id);
+    else openQuery([{ type: 'source', table }], table);
+  }
+
+  function closeQuery(id) {
+    const q = queries.find((x) => x.id === id);
+    const users = queries.filter((x) => x.id !== id && JSON.stringify(x.steps).includes(`"query":"${id}"`));
+    if (users.length && !confirm(`“${users.map((u) => u.name).join('”, “')}” uses “${q.name}”. Close it anyway?`)) return;
+    const i = queries.indexOf(q);
+    queries.splice(i, 1);
+    if (activeId === id) activeId = queries[Math.max(0, i - 1)]?.id || null;
+    save();
+    renderAll();
+    refresh();
+  }
+
+  function activate(id) {
+    activeId = id;
+    closeLayer();
+    const q = Q();
+    if (q) q.page = q.page || 0;
+    save();
+    renderAll();
+    refresh();
+  }
+
+  // Record the state before a change, for Undo.
+  function snapshot(q) {
+    q.undo.push(JSON.stringify({ steps: q.steps, view: q.view }));
+    if (q.undo.length > 60) q.undo.shift();
+  }
+
+  function undo() {
+    const q = Q();
+    if (!q || !q.undo.length) return;
+    const s = JSON.parse(q.undo.pop());
+    q.steps = s.steps;
+    q.view = s.view;
+    q.editing = null;
+    q.page = 0;
+    commit();
+  }
+
+  // Add a step after the one being viewed (like Power Query inserting after
+  // the selected step). `combine(prev)` may return a replacement for the
+  // previous step instead, e.g. a second sort replaces the first.
+  function addStep(step, opts = {}) {
+    const q = Q();
+    snapshot(q);
+    const at = viewIndex(q) + 1;
+    const prev = q.steps[at - 1];
+    let index;
+    const merged = opts.combine && prev && at - 1 > 0 ? opts.combine(prev) : null;
+    if (merged) {
+      q.steps[at - 1] = merged;
+      index = at - 1;
+    } else {
+      q.steps.splice(at, 0, step);
+      index = at;
+    }
+    q.view = index === q.steps.length - 1 ? null : index;
+    q.editing = opts.edit ? index : null;
+    q.page = 0;
+    commit();
+    return index;
+  }
+
+  function replaceStep(index, step) {
+    const q = Q();
+    snapshot(q);
+    q.steps[index] = step;
+    q.page = 0;
+    commit();
+  }
+
+  function deleteStep(index) {
+    const q = Q();
+    if (index <= 0) return;
+    snapshot(q);
+    q.steps.splice(index, 1);
+    if (q.view != null) q.view = q.view >= index ? Math.max(0, q.view - 1) : q.view;
+    if (q.view != null && q.view >= q.steps.length - 1) q.view = null;
+    q.editing = null;
+    q.page = 0;
+    commit();
+  }
+
+  function moveStep(index, delta) {
+    const q = Q();
+    const to = index + delta;
+    if (index <= 0 || to <= 0 || to >= q.steps.length) return;
+    snapshot(q);
+    const [s] = q.steps.splice(index, 1);
+    q.steps.splice(to, 0, s);
+    q.view = null;
+    q.editing = null;
+    commit();
+  }
+
+  function commit() {
+    save();
+    renderTabs();
+    renderSteps();
+    renderEditor();
+    renderTableList();
+    refresh();
+  }
+
+  // Live edits from the step editor: no undo entry per keystroke.
+  let editTimer = null;
+  function stepEdited(debounce) {
+    const q = Q();
+    q.page = 0;
+    save();
+    renderSteps();
+    clearTimeout(editTimer);
+    editTimer = setTimeout(refresh, debounce ? 350 : 0);
+  }
+
+  // ---------- persistence (per database, in this browser) ----------
+  const storeKey = () => 'dbx.q:' + db.path;
+  function save() {
+    if (!db) return;
+    try {
+      localStorage.setItem(storeKey(), JSON.stringify({
+        active: activeId,
+        queries: queries.map(({ id, name, steps, view }) => ({ id, name, steps, view })),
+      }));
+    } catch (_) { /* storage unavailable */ }
+  }
+  function restore() {
+    try {
+      const d = JSON.parse(localStorage.getItem(storeKey()) || 'null');
+      if (!d || !Array.isArray(d.queries)) return false;
+      queries = d.queries
+        .filter((q) => Array.isArray(q.steps) && q.steps.length && q.steps[0].type === 'source')
+        .map((q) => ({ ...q, page: 0, editing: null, undo: [] }));
+      activeId = d.active === 'sql' || queries.some((q) => q.id === d.active) ? d.active : queries[0]?.id || null;
+      return queries.length > 0;
+    } catch (_) {
+      return false;
+    }
   }
 
   // ---------- opening ----------
   const canOpenByPath = location.protocol === 'http:' || location.protocol === 'https:';
 
-  async function openPath(path, keepState) {
+  async function openPath(path, keep) {
     showOpenError(null);
     const btn = $('path-form').querySelector('button');
     btn.disabled = true;
     btn.textContent = 'Opening…';
     try {
       const d = await api('open', { path });
-      db = { id: d.id, path: d.path, name: d.name, size: d.size };
+      db = { id: d.id, path: d.path, name: d.name, size: d.size, sqliteVersion: d.sqliteVersion };
       schema = schemaFrom(d.tables);
     } finally {
       btn.disabled = false;
       btn.textContent = 'Open';
     }
-    if (!keepState) {
-      tableStates.clear();
-      current = null;
-      countCache.clear();
-    }
-    for (const t of [...tableStates.keys()]) if (!schema.tables[t]) tableStates.delete(t);
-    if (!current || !schema.tables[current]) {
-      current = Object.values(schema.tables).find((t) => t.type === 'table')?.name || Object.keys(schema.tables)[0] || null;
+    countCache.clear();
+    if (!keep) {
+      queries = [];
+      activeId = null;
+      if (!restore()) {
+        const first = Object.values(schema.tables).find((t) => t.type === 'table') || Object.values(schema.tables)[0];
+        if (first) queries.push({ id: newId(), name: first.name, steps: [{ type: 'source', table: first.name }], view: null, page: 0, editing: null, undo: [] });
+        activeId = queries[0]?.id || null;
+      }
     }
     if (db.path !== samplePath) rememberPath(db.path);
+    closeInspector();
     showWorkspace();
     countTables();
   }
 
   // Exact row counts for the sidebar, one table at a time in the background.
-  // COUNT(*) has to read the whole table, so on a big database this can take a while.
   async function countTables() {
     const dbId = db.id;
     for (const t of Object.values(schema.tables)) {
@@ -153,7 +362,6 @@
         if (!db || db.id !== dbId) return;
         t.rowCount = r.rows[0][0];
         renderTableList();
-        if (t.name === current) renderBuilderHead();
       } catch (e) {
         if (!db || db.id !== dbId) return;
       }
@@ -178,30 +386,27 @@
     $('open-error').textContent = msg || '';
   }
 
-  // ---------- recent paths (per-browser convenience only) ----------
   function recentPaths() {
     try { return JSON.parse(localStorage.getItem('dbx.recent') || '[]'); } catch (_) { return []; }
   }
   function rememberPath(p) {
     try {
-      const list = [p, ...recentPaths().filter((x) => x !== p)].slice(0, 6);
-      localStorage.setItem('dbx.recent', JSON.stringify(list));
+      localStorage.setItem('dbx.recent', JSON.stringify([p, ...recentPaths().filter((x) => x !== p)].slice(0, 6)));
     } catch (_) { /* storage unavailable */ }
   }
   function renderRecent() {
     const list = canOpenByPath ? recentPaths() : [];
     $('recent').hidden = !list.length;
     $('recent-list').replaceChildren(...list.map((p) =>
-      h('li', null, h('button', { class: 'link mono', type: 'button', title: p, onclick: withErrors(() => openPath(p)) }, p))
-    ));
+      h('li', null, h('button', { class: 'link mono', type: 'button', title: p, onclick: withErrors(() => openPath(p)) }, p))));
   }
 
   // ---------- screens ----------
   function showLanding() {
-    db = null; schema = null; current = null;
-    tableStates.clear();
+    db = null; schema = null; queries = []; activeId = null;
     countCache.clear();
-    closePopover();
+    closeLayer();
+    closeInspector();
     $('workspace').hidden = true;
     $('db-info').hidden = true;
     $('landing').hidden = false;
@@ -217,8 +422,22 @@
     $('db-name').textContent = `${db.path} · ${fmtBytes(db.size)}`;
     $('db-name').title = db.path;
     document.title = db.name + ' · DB Explorer';
+    renderAll();
+    refresh();
+  }
+
+  function renderAll() {
+    const sql = activeId === 'sql';
+    $('explore-panel').hidden = sql || !Q();
+    $('sql-panel').hidden = !sql;
+    $('steps-panel').hidden = sql || !Q();
+    $('btn-show-sql').hidden = sql;
+    $('sql-preview').hidden = sql || !sqlShown;
+    $('view-banner').hidden = true;
+    renderTabs();
     renderTableList();
-    selectTable(current, true);
+    renderSteps();
+    renderEditor();
   }
 
   // ---------- sidebar ----------
@@ -229,13 +448,16 @@
   }
 
   function renderTableList() {
+    if (!schema) return;
     const q = $('table-search').value.trim().toLowerCase();
+    const active = Q() ? sourceTable(Q()) : null;
     const items = Object.values(schema.tables).filter((t) => !q || t.name.toLowerCase().includes(q));
     const section = (title, list) => list.length ? [
       h('div', { class: 'list-heading' }, title),
       ...list.map((t) => h('button', {
-        class: 'table-item' + (t.name === current ? ' active' : ''),
-        onclick: () => selectTable(t.name),
+        class: 'table-item' + (t.name === active ? ' active' : ''),
+        title: `Open ${t.name}`,
+        onclick: () => openTable(t.name),
       }, h('span', { class: 'name' }, t.name), h('span', { class: 'count' }, countLabel(t)))),
     ] : [];
     const nodes = [
@@ -247,278 +469,299 @@
     $('table-list').replaceChildren(...nodes);
   }
 
-  function selectTable(name, keepPage) {
-    current = name;
-    if (!keepPage) page = 0;
-    closePopover();
-    renderTableList();
-    if (!name) {
-      $('table-title').textContent = 'No tables';
-      $('grid').replaceChildren();
-      return;
+  // ---------- query tabs ----------
+  function renderTabs() {
+    const tabs = queries.map((q) => h('div', {
+      class: 'qtab' + (q.id === activeId ? ' active' : ''), role: 'tab',
+      title: `${q.name}\nDouble-click to rename`,
+      onclick: (e) => { if (!e.target.closest('.x')) activate(q.id); },
+      ondblclick: async (e) => {
+        const name = await askText(e.currentTarget, 'Query name', q.name, 'Rename');
+        if (name && name.trim()) { q.name = uniqueQueryName(name.trim()); save(); renderTabs(); }
+      },
+    }, h('span', { class: 'qtab-name' }, q.name),
+    h('button', { class: 'x', title: 'Close', onclick: () => closeQuery(q.id) }, '×')));
+    tabs.push(h('div', {
+      class: 'qtab sql' + (activeId === 'sql' ? ' active' : ''), role: 'tab', onclick: () => setSqlMode(),
+    }, h('span', { class: 'qtab-name' }, 'Write SQL')));
+    $('query-tabs').replaceChildren(...tabs);
+  }
+
+  // ---------- applied steps ----------
+  const EDITABLE = new Set(['filter', 'group', 'top', 'sort', 'merge', 'lookup', 'append', 'link', 'columns', 'rename']);
+
+  function renderSteps() {
+    const q = Q();
+    if (!q) { $('steps').replaceChildren(); return; }
+    const errors = P.stepErrors(q.steps, schema, ctxFor(q));
+    const vi = viewIndex(q);
+    $('steps').replaceChildren(...q.steps.map((s, i) => {
+      const err = errors[i];
+      const li = h('li', {
+        class: 'step' + (i === vi ? ' selected' : '') + (i > vi ? ' later' : '') + (err ? ' has-error' : '') + (q.editing === i ? ' editing' : ''),
+        onclick: (e) => {
+          if (e.target.closest('button')) return;
+          q.view = i === q.steps.length - 1 ? null : i;
+          q.page = 0;
+          if (q.editing != null && q.editing !== i) q.editing = null;
+          save(); renderSteps(); renderEditor(); refresh();
+        },
+        ondblclick: (e) => { if (EDITABLE.has(s.type) && !e.target.closest('button')) editStep(i, li); },
+      },
+      h('span', { class: 'step-num' }, String(i + 1)),
+      h('span', { class: 'step-text' }, P.describe(s), err ? h('span', { class: 'step-error' }, err) : null),
+      h('span', { class: 'step-actions' },
+        EDITABLE.has(s.type) ? h('button', { class: 'icon', title: 'Edit this step', onclick: () => editStep(i, li) }, '✎') : null,
+        i > 0 ? h('button', { class: 'icon', title: 'More', onclick: (e) => stepMenu(e.currentTarget, i, li) }, '⋯') : null,
+        i > 0 ? h('button', { class: 'icon x', title: 'Delete this step', onclick: () => deleteStep(i) }, '×') : null));
+      return li;
+    }));
+    $('btn-undo').disabled = !q.undo.length;
+  }
+
+  function stepMenu(anchor, i, li) {
+    const q = Q();
+    menu(anchor, [
+      EDITABLE.has(q.steps[i].type) ? { icon: '✎', label: 'Edit', onclick: () => editStep(i, li) } : null,
+      { icon: '↑', label: 'Move up', disabled: i <= 1, onclick: () => moveStep(i, -1) },
+      { icon: '↓', label: 'Move down', disabled: i >= q.steps.length - 1, onclick: () => moveStep(i, 1) },
+      { icon: '⧉', label: 'New query from here', hint: 'copy steps 1–' + (i + 1) + ' into a new tab', onclick: () => openQuery(clone(q.steps.slice(0, i + 1)), q.name) },
+      '-',
+      { icon: '×', label: 'Delete', onclick: () => deleteStep(i) },
+      { icon: '⌫', label: 'Delete this and everything after', onclick: () => { snapshot(q); q.steps.splice(i); q.view = null; q.editing = null; commit(); } },
+    ]);
+  }
+
+  function editStep(i, anchor) {
+    const q = Q();
+    const s = q.steps[i];
+    if (['filter', 'group', 'top', 'sort'].includes(s.type)) {
+      snapshot(q);
+      q.editing = i;
+      q.view = i === q.steps.length - 1 ? null : i;
+      save(); renderSteps(); renderEditor(); refresh();
+    } else if (s.type === 'merge' || s.type === 'lookup' || s.type === 'append') {
+      combineDialog(s.type, i);
+    } else if (s.type === 'link') {
+      expandPicker(anchor, { table: s.table, pairs: s.pairs }, i);
+    } else if (s.type === 'columns') {
+      chooseColumns(anchor, i);
+    } else if (s.type === 'rename') {
+      askText(anchor, `Rename ${s.from} to`, s.to, 'Rename').then((to) => {
+        if (to && to.trim()) replaceStep(i, { ...s, to: to.trim() });
+      });
     }
-    if (!tableStates.has(name)) tableStates.set(name, newState(name));
-    renderBuilder();
-    if (mode === 'explore') refresh();
   }
 
-  // ---------- builder ----------
-  function renderBuilderHead() {
-    const t = schema.tables[current];
-    $('table-title').textContent = t.name;
-    const rows = t.rowCount != null ? `${fmt(t.rowCount)} rows` : t.estimate != null ? `about ${fmt(t.estimate)} rows` : null;
-    $('table-meta').textContent = [t.type === 'view' ? 'view' : null, rows, `${t.columns.length} columns`].filter(Boolean).join(' · ');
+  // ---------- step editor (filter / group / sort / top) ----------
+  function renderEditor() {
+    const q = Q();
+    const box = $('step-editor');
+    if (!q || activeId === 'sql' || q.editing == null || !q.steps[q.editing]) { box.hidden = true; box.replaceChildren(); return; }
+    const i = q.editing;
+    const s = q.steps[i];
+    const cols = colsBefore(q, i);
+    const titles = { filter: 'Filter rows', group: 'Group by', top: 'Keep top rows', sort: 'Sort' };
+    const body = h('div', { class: 'editor-body' });
+    ({ filter: filterEditor, group: groupEditor, top: topEditor, sort: sortEditor })[s.type](body, s, cols, q, i);
+    box.replaceChildren(
+      h('div', { class: 'editor-head' },
+        h('strong', null, `${titles[s.type]} · step ${i + 1}`),
+        h('span', { class: 'spacer' }),
+        h('button', { class: 'primary small', onclick: doneEditing }, 'Done')),
+      body);
+    box.hidden = false;
   }
 
-  function renderBuilder() {
-    const st = S();
-    renderBuilderHead();
-    const shown = st.columns.filter((c) => c.visible).length;
-    $('btn-columns').textContent = `Columns (${shown} of ${st.columns.length})`;
-    $('btn-columns').disabled = st.summary.on;
-    $('summary-toggle').checked = st.summary.on;
-    $('btn-links').hidden = !availableLinks(st, schema).length && !st.joins.length;
-    renderJoins();
-    renderFilters();
-    renderSummary();
+  function doneEditing() {
+    const q = Q();
+    const i = q.editing;
+    q.editing = null;
+    const s = q.steps[i];
+    // A filter with nothing filled in does nothing; don't leave it lying around.
+    if (s && s.type === 'filter') {
+      const effective = s.conditions.some((c) => {
+        const op = P.OPERATORS.find((o) => o.id === c.op);
+        return op.arity === 0 || (c.value !== '' && c.value != null) || c.value === null || Array.isArray(c.value);
+      });
+      if (!effective) { q.steps.splice(i, 1); if (q.view != null && q.view >= i) q.view = null; }
+    }
+    commit();
   }
 
-  function columnSelect(cols, value, onchange, placeholder) {
+  function colSelect(cols, value, onchange, placeholder) {
     return h('select', { onchange: (e) => onchange(e.target.value) },
       placeholder ? h('option', { value: '', selected: !value, disabled: true }, placeholder) : null,
-      cols.map((c) => h('option', { value: c.key, selected: c.key === value }, c.label)));
+      cols.map((c) => h('option', { value: c.name, selected: c.name === value }, c.name)));
   }
 
-  function renderJoins() {
-    const st = S();
-    const box = $('joins');
-    box.replaceChildren();
-    if (!st.joins.length) return;
-    box.append(h('span', { class: 'muted small' }, 'Linked:'));
-    for (const j of st.joins) {
-      box.append(h('span', { class: 'tag' },
-        j.label,
-        h('span', { class: 'muted' }, ` via ${j.pairs.map((p) => p[0]).join(', ')}`),
-        h('button', { class: 'x', title: 'Remove this link', onclick: () => removeJoin(j.alias) }, '×')));
+  function filterEditor(body, s, cols, q, i) {
+    if (s.conditions.length > 1) {
+      body.append(h('div', { class: 'small' }, 'Keep rows that match ',
+        h('select', { onchange: (e) => { s.match = e.target.value; stepEdited(); } },
+          h('option', { value: 'all', selected: s.match !== 'any' }, 'all'),
+          h('option', { value: 'any', selected: s.match === 'any' }, 'any')),
+        ' of these'));
     }
-  }
-
-  function renderFilters() {
-    const st = S();
-    const cols = availableColumns(st, schema);
-    const box = $('filters');
-    box.replaceChildren();
-    if (!st.filters.length) return;
-    if (st.filters.length > 1) {
-      box.append(h('div', { class: 'match small' }, 'Show rows that match ',
-        h('select', { onchange: (e) => { st.match = e.target.value; changed(); } },
-          h('option', { value: 'all', selected: st.match === 'all' }, 'all'),
-          h('option', { value: 'any', selected: st.match === 'any' }, 'any')),
-        ' of these filters'));
-    }
-    st.filters.forEach((f, i) => {
-      const op = OPERATORS.find((o) => o.id === f.op);
-      const col = cols.find((c) => c.key === f.key);
-      const listId = `dl-${i}`;
-      const valueInput = (prop, placeholder) => h('input', {
-        type: 'text', value: f[prop] ?? '', placeholder, list: op.arity === 1 ? listId : null,
-        oninput: (e) => { f[prop] = e.target.value; changed(true); },
-        onfocus: () => fillDistinct(listId, col),
+    s.conditions.forEach((c, k) => {
+      const op = P.OPERATORS.find((o) => o.id === c.op) || P.OPERATORS[0];
+      const listId = `dl-${i}-${k}`;
+      const typed = typeof c.value === 'string' || c.value == null;
+      const input = (prop, placeholder) => h('input', {
+        type: 'text', placeholder, list: op.arity === 1 ? listId : null,
+        value: prop === 'value' && !typed ? (Array.isArray(c.value) ? c.value.map((v) => display(v)).join(', ') : display(c.value)) : (c[prop] ?? ''),
+        oninput: (e) => { c[prop] = e.target.value; delete c.negate; stepEdited(true); },
+        onfocus: () => suggestValues(listId, q, i, c.col),
       });
       const inputs = [];
-      if (op.arity === 1) inputs.push(valueInput('value', 'value'), h('datalist', { id: listId }));
-      if (op.arity === 2) inputs.push(valueInput('value', 'from'), h('span', { class: 'muted' }, 'and'), valueInput('value2', 'to'));
-      if (op.arity === 'list') inputs.push(valueInput('value', 'e.g. London, Paris, Rome'));
-      box.append(h('div', { class: 'filter-row' },
-        columnSelect(cols, f.key, (k) => { f.key = k; changed(); renderFilters(); }),
-        h('select', { onchange: (e) => { f.op = e.target.value; changed(); renderFilters(); } },
-          OPERATORS.map((o) => h('option', { value: o.id, selected: o.id === f.op }, o.label))),
+      if (op.arity === 1) inputs.push(input('value', 'value'), h('datalist', { id: listId }));
+      if (op.arity === 2) inputs.push(input('value', 'from'), h('span', { class: 'muted' }, 'and'), input('value2', 'to'));
+      if (op.arity === 'list') inputs.push(input('value', 'e.g. London, Paris, Rome'));
+      body.append(h('div', { class: 'filter-row' },
+        colSelect(cols, c.col, (v) => { c.col = v; stepEdited(); renderEditor(); }),
+        h('select', { onchange: (e) => { c.op = e.target.value; if (Array.isArray(c.value)) c.value = ''; stepEdited(); renderEditor(); } },
+          P.OPERATORS.map((o) => h('option', { value: o.id, selected: o.id === c.op }, o.label))),
         ...inputs,
-        h('button', { class: 'x', title: 'Remove filter', onclick: () => { st.filters.splice(i, 1); changed(); renderFilters(); } }, '×')));
+        h('button', { class: 'x', title: 'Remove', onclick: () => { s.conditions.splice(k, 1); if (!s.conditions.length) { doneEditing(); return; } stepEdited(); renderEditor(); } }, '×')));
     });
+    body.append(h('button', { class: 'ghost small', onclick: () => {
+      s.conditions.push({ col: cols[0]?.name, op: 'contains', value: '' });
+      renderEditor();
+    } }, '+ Add another condition'));
   }
 
-  // Suggestions for the filter box. Only samples the first 200,000 rows so it
-  // stays quick on huge tables.
-  async function fillDistinct(listId, col) {
+  // Suggestions for a filter box: values from the rows going into this step
+  // (sampled, so it stays quick on huge tables).
+  async function suggestValues(listId, q, i, colName) {
     const dl = document.getElementById(listId);
-    if (!dl || !col || dl.dataset.for === col.key) return;
-    dl.dataset.for = col.key;
-    const c = qi(col.column);
+    if (!dl || dl.dataset.for === colName) return;
+    dl.dataset.for = colName;
+    const before = P.compile(q.steps, schema, i - 1, ctxFor(q));
+    if (before.error || !before.cols.some((c) => c.name === colName)) return;
     try {
       const r = await query(
-        `SELECT DISTINCT v FROM (SELECT ${c} AS v FROM ${qi(col.table)} LIMIT 200000) WHERE v IS NOT NULL AND typeof(v) <> 'blob' LIMIT 300`,
-        [], 'distinct', 300);
-      r.rows.sort((a, b) => String(a[0]).localeCompare(String(b[0]), undefined, { numeric: true }));
-      dl.replaceChildren(...r.rows.map(([v]) => h('option', { value: plain(v) })));
+        `SELECT DISTINCT v FROM (SELECT ${qi(colName)} AS v FROM (${before.unsortedSql}) LIMIT ${VALUES_SAMPLE}) WHERE v IS NOT NULL AND typeof(v) <> 'blob' LIMIT 300`,
+        before.params, 'distinct', 300);
+      r.rows.sort((a, b) => display(a[0]).localeCompare(display(b[0]), undefined, { numeric: true }));
+      dl.replaceChildren(...r.rows.map(([v]) => h('option', { value: display(v) })));
     } catch (_) { /* suggestions are optional */ }
   }
 
-  function renderSummary() {
-    const st = S();
-    const box = $('summary');
-    box.hidden = !st.summary.on;
-    box.replaceChildren();
-    if (!st.summary.on) return;
-    const cols = availableColumns(st, schema);
-    const byKey = new Map(cols.map((c) => [c.key, c]));
-    const sm = st.summary;
+  function groupEditor(body, s, cols) {
+    const byTags = s.by.map((name, k) => h('span', { class: 'tag' }, name,
+      h('button', { class: 'x', title: 'Remove', onclick: () => { s.by.splice(k, 1); stepEdited(); renderEditor(); } }, '×')));
+    body.append(h('div', { class: 'summary-row' },
+      h('span', { class: 'label' }, 'Group rows by'), ...byTags,
+      colSelect(cols.filter((c) => !s.by.includes(c.name)), '', (v) => { s.by.push(v); stepEdited(); renderEditor(); },
+        s.by.length ? '+ add another' : 'choose a column…')));
+    measureRows(body, s.measures, cols, 'and show');
+    if (!s.by.length) body.append(h('p', { class: 'muted small' }, 'With nothing to group by, this summarises all the rows into one.'));
+  }
 
-    const groupTags = sm.groupBy.filter((k) => byKey.has(k)).map((k, i) => h('span', { class: 'tag' }, byKey.get(k).label,
-      h('button', { class: 'x', title: 'Remove', onclick: () => { sm.groupBy.splice(i, 1); changed(); renderSummary(); } }, '×')));
-    const remaining = cols.filter((c) => !sm.groupBy.includes(c.key));
-    box.append(h('div', { class: 'summary-row' },
-      h('span', { class: 'label' }, 'Group rows by'),
-      ...groupTags,
-      columnSelect(remaining, '', (k) => { sm.groupBy.push(k); changed(); renderSummary(); }, sm.groupBy.length ? '+ add another' : 'choose a column…')));
-
-    sm.measures.forEach((m, i) => {
-      const def = MEASURES.find((d) => d.id === m.fn);
-      box.append(h('div', { class: 'summary-row' },
-        h('span', { class: 'label' }, i === 0 ? 'and show' : 'and'),
-        h('select', { onchange: (e) => { m.fn = e.target.value; if (MEASURES.find((d) => d.id === m.fn).needsColumn && !m.key) m.key = likelyAmount(cols); changed(); renderSummary(); } },
-          MEASURES.map((d) => h('option', { value: d.id, selected: d.id === m.fn }, d.label))),
-        def.needsColumn ? columnSelect(cols, m.key, (k) => { m.key = k; changed(); }) : null,
-        sm.measures.length > 1 ? h('button', { class: 'x', title: 'Remove', onclick: () => { sm.measures.splice(i, 1); changed(); renderSummary(); } }, '×') : null));
+  function measureRows(body, measures, cols, lead, onChange, redraw) {
+    onChange = onChange || stepEdited;
+    redraw = redraw || renderEditor;
+    measures.forEach((m, k) => {
+      const def = P.MEASURES.find((d) => d.id === m.fn);
+      body.append(h('div', { class: 'summary-row' },
+        h('span', { class: 'label' }, k === 0 ? lead : 'and'),
+        h('select', { onchange: (e) => {
+          m.fn = e.target.value;
+          if (P.MEASURES.find((d) => d.id === m.fn).needsColumn && !m.col) m.col = likelyAmount(cols);
+          if (!P.MEASURES.find((d) => d.id === m.fn).needsColumn) delete m.col;
+          onChange(); redraw();
+        } }, P.MEASURES.map((d) => h('option', { value: d.id, selected: d.id === m.fn }, d.label))),
+        def.needsColumn ? colSelect(cols, m.col, (v) => { m.col = v; onChange(); }) : null,
+        measures.length > 1 ? h('button', { class: 'x', title: 'Remove', onclick: () => { measures.splice(k, 1); onChange(); redraw(); } }, '×') : null));
     });
-    box.append(h('button', { class: 'ghost small', onclick: () => { sm.measures.push({ fn: 'sum', key: likelyAmount(cols) }); changed(); renderSummary(); } }, '+ Show another figure'));
+    body.append(h('button', { class: 'ghost small', onclick: () => {
+      measures.push({ fn: 'sum', col: likelyAmount(cols) });
+      onChange(); redraw();
+    } }, '+ Show another figure'));
   }
 
   // Best guess at a column worth adding up: numeric, and not an ID or key.
   function likelyAmount(cols) {
-    const isKey = (c) => /(^|_)id$/i.test(c.column) || schema.tables[c.table].columns.find((x) => x.name === c.column)?.pk;
-    const numeric = cols.filter((c) => ['INTEGER', 'REAL', 'NUMERIC'].includes(c.affinity) && !isKey(c));
-    return (numeric.find((c) => c.affinity === 'REAL') || numeric[0] || cols[0])?.key;
+    const isKey = (c) => /(^|_|\.)id$/i.test(c.name) || (c.prov && P.primaryKey(c.prov.table, schema) === c.prov.column);
+    const numeric = cols.filter((c) => P.isNumeric(c.affinity) && !isKey(c));
+    return (numeric.find((c) => c.affinity === 'REAL') || numeric[0] || cols[0])?.name;
   }
 
-  function addJoin(link) {
-    const st = S();
-    const alias = 'j' + st.nextAlias++;
-    st.joins.push({ alias, from: link.from, fkId: link.fkId, table: link.table, pairs: link.pairs, label: link.label });
-    const keyCols = new Set(link.pairs.map((p) => p[1]));
-    for (const c of schema.tables[link.table].columns) st.columns.push({ key: alias + '.' + c.name, visible: !keyCols.has(c.name) });
-    closePopover();
-    renderBuilder();
-    changed();
+  function topEditor(body, s) {
+    body.append(h('div', { class: 'summary-row' }, 'Keep the first',
+      h('input', { type: 'number', min: 1, value: s.n, style: { width: '110px' }, oninput: (e) => { s.n = e.target.value; stepEdited(true); } }),
+      'rows', h('span', { class: 'muted small' }, '(after any sorting above)')));
   }
 
-  function removeJoin(alias) {
-    const st = S();
-    const gone = new Set([alias]);
-    let grew = true;
-    while (grew) { // also drop links that hang off this one
-      grew = false;
-      for (const j of st.joins) if (gone.has(j.from) && !gone.has(j.alias)) { gone.add(j.alias); grew = true; }
-    }
-    const keep = (key) => key == null || !gone.has(key.split('.')[0]);
-    st.joins = st.joins.filter((j) => !gone.has(j.alias));
-    st.columns = st.columns.filter((c) => keep(c.key));
-    st.filters = st.filters.filter((f) => keep(f.key));
-    st.summary.groupBy = st.summary.groupBy.filter(keep);
-    st.summary.measures = st.summary.measures.filter((m) => keep(m.key));
-    if (!st.summary.measures.length) st.summary.measures.push({ fn: 'count', key: null });
-    renderBuilder();
-    changed();
-  }
-
-  // ---------- popovers ----------
-  function openPopover(anchor, content) {
-    const pop = $('popover');
-    pop.replaceChildren(content);
-    pop.hidden = false;
-    const r = anchor.getBoundingClientRect();
-    const left = Math.min(r.left, window.innerWidth - pop.offsetWidth - 12);
-    pop.style.left = Math.max(12, left) + 'px';
-    pop.style.top = r.bottom + 6 + window.scrollY + 'px';
-    pop.dataset.anchor = anchor.id;
-  }
-  function closePopover() { $('popover').hidden = true; $('popover').dataset.anchor = ''; }
-
-  function columnsPopover() {
-    const st = S();
-    const cols = availableColumns(st, schema);
-    const byKey = new Map(cols.map((c) => [c.key, c]));
-    const search = h('input', { type: 'search', placeholder: 'Find a column…', oninput: () => drawList() });
-    const list = h('div', { class: 'check-list' });
-    const drawList = () => {
-      const q = search.value.trim().toLowerCase();
-      list.replaceChildren(...st.columns.filter((c) => byKey.has(c.key) && byKey.get(c.key).label.toLowerCase().includes(q)).map((c) =>
-        h('label', { class: 'check' },
-          h('input', { type: 'checkbox', checked: c.visible, onchange: (e) => { c.visible = e.target.checked; renderBuilder(); changed(); } }),
-          h('span', null, byKey.get(c.key).label))));
-    };
-    const setAll = (v) => { st.columns.forEach((c) => { c.visible = v; }); drawList(); renderBuilder(); changed(); };
-    drawList();
-    return h('div', { class: 'pop-columns' },
-      h('div', { class: 'row' }, search,
-        h('button', { class: 'ghost small', onclick: () => setAll(true) }, 'All'),
-        h('button', { class: 'ghost small', onclick: () => setAll(false) }, 'None')),
-      list);
-  }
-
-  function linksPopover() {
-    const links = availableLinks(S(), schema);
-    if (!links.length) return h('p', { class: 'muted pad' }, 'No more related tables to link.');
-    return h('div', { class: 'pop-links' },
-      h('p', { class: 'muted small' }, 'Bring in columns from a related table:'),
-      links.map((l) => h('button', { class: 'link-item', onclick: () => addJoin(l) },
-        h('strong', null, l.label), h('span', { class: 'muted small' }, `matched on ${l.via}`))));
-  }
-
-  function togglePopover(anchor, make) {
-    if (!$('popover').hidden && $('popover').dataset.anchor === anchor.id) closePopover();
-    else openPopover(anchor, make());
+  function sortEditor(body, s, cols) {
+    s.by.forEach((o, k) => {
+      body.append(h('div', { class: 'summary-row' },
+        h('span', { class: 'label' }, k === 0 ? 'Sort by' : 'then by'),
+        colSelect(cols, o.col, (v) => { o.col = v; stepEdited(); }),
+        h('select', { onchange: (e) => { o.dir = e.target.value; stepEdited(); } },
+          h('option', { value: 'asc', selected: o.dir !== 'desc' }, 'A → Z, smallest first'),
+          h('option', { value: 'desc', selected: o.dir === 'desc' }, 'Z → A, largest first')),
+        s.by.length > 1 ? h('button', { class: 'x', onclick: () => { s.by.splice(k, 1); stepEdited(); renderEditor(); } }, '×') : null));
+    });
+    body.append(h('button', { class: 'ghost small', onclick: () => { s.by.push({ col: cols[0].name, dir: 'asc' }); stepEdited(); renderEditor(); } }, '+ Then by another column'));
   }
 
   // ---------- results ----------
   let refreshTimer = null;
   let refreshSeq = 0;
-  let lastTotal = null; // row count of the current explore query, once known
-  const countCache = new Map(); // count SQL + params -> total
+  let lastTotal = null;
+  let lastPage = { rows: 0, more: false };
 
-  function changed(debounce) {
-    page = 0;
-    clearTimeout(refreshTimer);
-    refreshTimer = setTimeout(refresh, debounce ? 350 : 0);
-  }
-
-  function setLoading(on) {
-    $('grid-wrap').classList.toggle('loading', on);
-  }
+  function setLoading(on) { $('grid-wrap').classList.toggle('loading', on); }
 
   async function refresh() {
     clearTimeout(refreshTimer);
-    if (mode !== 'explore' || !current) return;
+    clearTimeout(editTimer);
+    if (!db || activeId === 'sql') return;
+    const q = Q();
     const seq = ++refreshSeq;
-    const stale = () => seq !== refreshSeq || mode !== 'explore';
+    const stale = () => seq !== refreshSeq || Q() !== q;
     showResultError(null);
-    const q = build(S(), schema);
-    $('sql-preview-text').textContent = q ? inlineParams(q.sql, q.params) : '';
     if (!q) {
-      $('result-count').textContent = 'Choose at least one column to show.';
+      $('result-count').textContent = 'Pick a table on the left to start.';
       $('grid').replaceChildren();
       $('pager').replaceChildren();
       return;
     }
+    const vi = viewIndex(q);
+    const banner = $('view-banner');
+    banner.hidden = vi === q.steps.length - 1;
+    if (!banner.hidden) {
+      banner.replaceChildren(`Showing the data after step ${vi + 1} of ${q.steps.length} (“${P.describe(q.steps[vi])}”). `,
+        h('button', { class: 'link', onclick: () => { q.view = null; q.editing = null; commit(); } }, 'Show the final result'));
+    }
 
-    const countKey = q.countSql + '\u0000' + JSON.stringify(q.countParams);
-    const table = schema.tables[current];
-    const wholeTable = q.countSql === `SELECT COUNT(*) FROM ${qi(current)}`;
+    const c = compileView(q);
+    if (c.error && c.error.step <= vi) {
+      showResultError(`Step ${c.error.step + 1} (“${P.describe(q.steps[c.error.step])}”) has a problem: ${c.error.message}. Edit or delete it in Applied steps.`);
+      return;
+    }
+    $('sql-preview-text').textContent = inlineParams(c.sql, c.params);
+
+    const countKey = c.countSql + '\u0000' + JSON.stringify(c.countParams);
+    const base = q.steps.length && schema.tables[sourceTable(q)];
+    const wholeTable = base && c.countSql === `SELECT COUNT(*) FROM ${qi(base.name)}`;
     lastTotal = countCache.has(countKey) ? countCache.get(countKey) : null;
-    if (lastTotal == null && wholeTable) lastTotal = table.rowCount;
+    if (lastTotal == null && wholeTable) lastTotal = base.rowCount;
     if (lastTotal == null) {
       $('result-count').replaceChildren(h('span', { class: 'muted' }, 'Counting rows…'));
-      query(q.countSql, q.countParams, 'count', 1).then((r) => {
+      query(c.countSql, c.countParams, 'count', 1, 'Counting rows').then((r) => {
         countCache.set(countKey, r.rows[0][0]);
-        if (wholeTable && table.rowCount == null) { // share it with the sidebar
-          table.rowCount = r.rows[0][0];
-          if (schema && schema.tables[table.name] === table) renderTableList();
-        }
+        if (wholeTable && base.rowCount == null) { base.rowCount = r.rows[0][0]; renderTableList(); }
         if (stale()) return;
         lastTotal = r.rows[0][0];
         showCount();
       }).catch((e) => {
-        if (!(e instanceof CancelledError) && !stale()) $('result-count').textContent = '';
+        if (stale()) return;
+        if (e instanceof CancelledError && userCancelled.delete('count')) {
+          $('result-count').replaceChildren(h('span', { class: 'muted' }, 'Row count stopped. '),
+            h('button', { class: 'link small', onclick: refresh }, 'Count again'));
+        } else if (!(e instanceof CancelledError)) $('result-count').textContent = '';
       });
     } else {
       showCount();
@@ -526,46 +769,62 @@
 
     const loadingTimer = setTimeout(() => setLoading(true), 150);
     try {
-      const r = await query(q.sql + ' LIMIT ? OFFSET ?', [...q.params, PAGE_SIZE, page * PAGE_SIZE], 'page', PAGE_SIZE);
+      const r = await query(c.sql + ' LIMIT ? OFFSET ?', [...c.params, PAGE_SIZE, q.page * PAGE_SIZE], 'page', PAGE_SIZE, workLabel(q));
       if (stale()) return;
-      renderGrid(q.labels, r.rows, true);
+      renderGrid(c.cols, r.rows, c.order);
       lastPage = { rows: r.rows.length, more: r.more };
       renderPager();
     } catch (e) {
-      if (!(e instanceof CancelledError) && !stale()) showResultError(e.message);
+      if (stale()) return;
+      if (e instanceof CancelledError && userCancelled.delete('page')) showStopped(refresh);
+      else if (!(e instanceof CancelledError)) showResultError(e.message);
     } finally {
       clearTimeout(loadingTimer);
       if (!stale()) setLoading(false);
     }
   }
 
-  let lastPage = { rows: 0, more: false };
-
   function showCount() {
     $('result-count').textContent = `${fmt(lastTotal)} ${lastTotal === 1 ? 'row' : 'rows'}`;
     renderPager();
   }
 
-  function renderGrid(labels, rows, sortable) {
-    const st = S();
-    const head = h('tr', null, labels.map((l) => {
-      const dir = sortable && st.sort && st.sort.label === l ? st.sort.dir : null;
-      return h('th', {
-        class: sortable ? 'sortable' : null,
-        title: sortable ? 'Click to sort' : null,
-        onclick: sortable ? () => cycleSort(l) : null,
-      }, l, dir ? h('span', { class: 'arrow' }, dir === 'asc' ? ' ▲' : ' ▼') : null);
+  const TYPE_BADGE = { INTEGER: '123', REAL: '1.2', NUMERIC: '#', TEXT: 'ABC', NONE: 'any' };
+
+  // cols: pipeline columns (explore) or plain names (SQL tab, not clickable).
+  function renderGrid(cols, rows, order) {
+    const interactive = cols.length && typeof cols[0] === 'object';
+    const head = h('tr', null, cols.map((c) => {
+      if (!interactive) return h('th', null, c);
+      const sorted = order && order.find((o) => o.col === c.name);
+      const pk = c.prov && P.primaryKey(c.prov.table, schema) === c.prov.column;
+      const parent = P.parentOf(c, schema);
+      const th = h('th', { class: 'col-head', title: `${c.name}${c.prov ? `\nfrom ${c.prov.table}.${c.prov.column}` : ''}\nClick for options` },
+        h('span', { class: 'th-inner' },
+          h('span', { class: 'type-badge' }, TYPE_BADGE[c.affinity] || ''),
+          pk ? h('span', { class: 'key-badge', title: 'Primary key: click a value to see where it’s used' }, 'PK') : null,
+          parent ? h('span', { class: 'key-badge fk', title: `Links to ${parent.table}` }, 'FK') : null,
+          h('span', { class: 'th-name' }, c.name),
+          sorted ? h('span', { class: 'arrow' }, sorted.dir === 'desc' ? '↓' : '↑') : null,
+          parent ? h('button', {
+            class: 'expand', title: `Expand ${parent.table}: bring in its columns`,
+            onclick: (e) => { e.stopPropagation(); expandPicker(e.currentTarget, P.outgoingLinks([c], schema)[0]); },
+          }, '⤢') : null,
+          h('span', { class: 'caret' }, '▾')));
+      th.addEventListener('click', () => columnMenu(th, c));
+      return th;
     }));
     const body = rows.length
-      ? rows.map((row) => h('tr', null, row.map(cell)))
-      : [h('tr', null, h('td', { class: 'empty', colSpan: labels.length || 1 }, 'No rows match.'))];
+      ? rows.map((row) => h('tr', null, row.map((v, k) => {
+        const td = cell(v);
+        if (interactive) {
+          td.classList.add('clickable');
+          td.addEventListener('click', () => cellMenu(td, cols[k], v, row, cols));
+        }
+        return td;
+      })))
+      : [h('tr', null, h('td', { class: 'empty', colSpan: cols.length || 1 }, 'No rows match.'))];
     $('grid').replaceChildren(h('thead', null, head), h('tbody', null, body));
-  }
-
-  // Values arrive as JSON; a few kinds are wrapped by the server so nothing is lost.
-  function plain(v) {
-    if (v && typeof v === 'object') return v.$int ?? v.$text ?? '';
-    return v;
   }
 
   function cell(v) {
@@ -580,26 +839,24 @@
     return s.length > 200 ? h('td', { title: s.slice(0, 2000) }, s.slice(0, 200) + '…') : h('td', null, s);
   }
 
-  function cycleSort(label) {
-    const st = S();
-    if (!st.sort || st.sort.label !== label) st.sort = { label, dir: 'asc' };
-    else if (st.sort.dir === 'asc') st.sort.dir = 'desc';
-    else st.sort = null;
-    changed();
+  function renderPager() {
+    const q = Q();
+    if (!q || activeId === 'sql') return;
+    const from = lastPage.rows ? q.page * PAGE_SIZE + 1 : 0;
+    const to = q.page * PAGE_SIZE + lastPage.rows;
+    const go = (p) => { q.page = p; refresh(); $('grid-wrap').scrollTop = 0; };
+    const multi = q.page > 0 || lastPage.more;
+    $('pager').replaceChildren(
+      multi ? h('button', { class: 'ghost small', disabled: q.page === 0, onclick: () => go(q.page - 1) }, '← Previous') : '',
+      h('span', { class: 'muted small' }, lastPage.rows
+        ? `Showing ${fmt(from)}–${fmt(to)}` + (lastTotal != null ? ` of ${fmt(lastTotal)}` : '') : ''),
+      multi ? h('button', { class: 'ghost small', disabled: !lastPage.more, onclick: () => go(q.page + 1) }, 'Next →') : '');
   }
 
-  function renderPager() {
-    if (mode !== 'explore') return;
-    const from = lastPage.rows ? page * PAGE_SIZE + 1 : 0;
-    const to = page * PAGE_SIZE + lastPage.rows;
-    const go = (p) => { page = p; refresh(); $('grid-wrap').scrollTop = 0; };
-    const multi = page > 0 || lastPage.more;
-    $('pager').replaceChildren(
-      multi ? h('button', { class: 'ghost small', disabled: page === 0, onclick: () => go(page - 1) }, '← Previous') : '',
-      h('span', { class: 'muted small' }, lastPage.rows
-        ? `Showing ${fmt(from)}–${fmt(to)}` + (lastTotal != null ? ` of ${fmt(lastTotal)}` : '')
-        : ''),
-      multi ? h('button', { class: 'ghost small', disabled: !lastPage.more, onclick: () => go(page + 1) }, 'Next →') : '');
+  function showStopped(retry) {
+    $('grid').replaceChildren(h('tbody', null, h('tr', null, h('td', { class: 'empty' },
+      'Stopped. ', h('button', { class: 'link', onclick: retry }, 'Try again')))));
+    $('pager').replaceChildren();
   }
 
   function showResultError(msg) {
@@ -618,68 +875,583 @@
       if (ch === "'" || ch === '"') { quote = ch; out += ch; continue; }
       if (ch === '?' && i < params.length) {
         const p = params[i++];
-        out += typeof p === 'number' ? String(p) : "'" + String(p).replace(/'/g, "''") + "'";
+        out += typeof p === 'number' ? String(p) : p && typeof p === 'object' ? String(p.$int ?? p.$text) : "'" + String(p).replace(/'/g, "''") + "'";
         continue;
       }
       out += ch;
     }
-    return out.replace(/ (FROM|LEFT JOIN|WHERE|GROUP BY|ORDER BY) /g, '\n$1 ');
+    return out;
   }
 
-  // ---------- SQL mode ----------
+  // ---------- column heading menu ----------
+  function sortBy(col, dir) {
+    addStep({ type: 'sort', by: [{ col, dir }] }, { combine: (prev) => (prev.type === 'sort' ? { type: 'sort', by: [{ col, dir }] } : null) });
+  }
+
+  function addFilter(cond, edit) {
+    addStep({ type: 'filter', match: 'all', conditions: [cond] }, { edit });
+  }
+
+  function columnMenu(anchor, col) {
+    const q = Q();
+    const c = compileView(q);
+    const sorted = c.order.find((o) => o.col === col.name);
+    const parent = P.parentOf(col, schema);
+    const related = P.relatedFor(col, schema);
+    const numeric = P.isNumeric(col.affinity);
+    menu(anchor, [
+      { icon: '↑', label: numeric ? 'Sort smallest to largest' : 'Sort A to Z', onclick: () => sortBy(col.name, 'asc') },
+      { icon: '↓', label: numeric ? 'Sort largest to smallest' : 'Sort Z to A', onclick: () => sortBy(col.name, 'desc') },
+      sorted ? { icon: '', label: 'Clear sort', onclick: () => addStep({ type: 'sort', by: [] }, { combine: (prev) => (prev.type === 'sort' ? { type: 'sort', by: [] } : null) }) } : null,
+      '-',
+      { icon: '☑', label: 'Filter by values…', hint: 'tick the values to keep', onclick: () => valuesFilter(anchor, col) },
+      { icon: 'ƒ', label: numeric ? 'Filter by a range…' : 'Filter by text…', hint: numeric ? 'greater than, between…' : 'contains, starts with…',
+        onclick: () => addFilter({ col: col.name, op: numeric ? 'gte' : 'contains', value: '' }, true) },
+      { icon: '∅', label: 'Remove empty rows', onclick: () => addFilter({ col: col.name, op: 'notEmpty' }) },
+      '-',
+      { icon: 'Σ', label: 'Group by this column', hint: 'number of rows for each value', onclick: () => addStep({ type: 'group', by: [col.name], measures: [{ fn: 'count' }] }, { edit: true }) },
+      { icon: '✎', label: 'Rename…', onclick: async () => {
+        const to = await askText(anchor, `Rename “${col.name}” to`, col.name, 'Rename');
+        if (to && to.trim() && to.trim() !== col.name) addStep({ type: 'rename', from: col.name, to: to.trim() });
+      } },
+      { icon: '✕', label: 'Remove this column', onclick: () => addStep({ type: 'remove', cols: [col.name] },
+        { combine: (prev) => (prev.type === 'remove' ? { type: 'remove', cols: prev.cols.concat(col.name) } : null) }) },
+      { icon: '◧', label: 'Remove other columns', onclick: () => addStep({ type: 'columns', keep: [col.name] }) },
+      parent || related.length ? '-' : null,
+      parent ? { icon: '⤢', label: `Expand ${parent.table}…`, hint: 'bring in its columns', onclick: () => expandPicker(anchor, P.outgoingLinks([col], schema)[0]) } : null,
+      ...related.slice(0, 8).map((r) => ({
+        icon: '#', label: `Count matching ${r.table}`, hint: `adds a column: how many ${r.table} rows have this ${r.column}`,
+        onclick: () => addStep({ type: 'lookup', source: { table: r.table }, on: [[col.name, r.column]], measures: [{ fn: 'count' }] }),
+      })),
+      related.length ? { icon: '+', label: 'Add other figures from a related table…', onclick: () => combineDialog('lookup', null, { col: col.name, related: related[0] }) } : null,
+    ], col.name);
+  }
+
+  // Excel-style "tick the values to keep", with counts.
+  function valuesFilter(anchor, col) {
+    const q = Q();
+    const vi = viewIndex(q);
+    const c = compileView(q);
+    const existing = q.steps[vi] && q.steps[vi].type === 'filter' && q.steps[vi].conditions.length === 1 &&
+      q.steps[vi].conditions[0].col === col.name && q.steps[vi].conditions[0].op === 'in' && Array.isArray(q.steps[vi].conditions[0].value)
+      ? q.steps[vi] : null;
+    // When changing an existing value filter, list the values going into it.
+    const source = existing ? P.compile(q.steps, schema, vi - 1, ctxFor(q)) : c;
+    const key = (v) => JSON.stringify(v);
+    let entries = [];
+    let full = false;
+    let sortMode = 'count';
+    const exCond = existing && existing.conditions[0];
+    const exSet = exCond ? new Set(exCond.value.map(key)) : null;
+
+    const search = h('input', { type: 'search', placeholder: 'Search values…', oninput: () => draw() });
+    const all = h('input', { type: 'checkbox', checked: true, onchange: (e) => { visible().forEach((en) => { en.checked = e.target.checked; }); draw(); } });
+    const list = h('div', { class: 'check-list values' }, h('p', { class: 'muted pad' }, 'Loading values…'));
+    const note = h('div', { class: 'muted small' });
+    const sortBtn = h('button', { class: 'ghost small', onclick: () => { sortMode = sortMode === 'count' ? 'az' : 'count'; draw(); } });
+    const visible = () => {
+      const s = search.value.trim().toLowerCase();
+      return entries.filter((en) => !s || display(en.v).toLowerCase().includes(s));
+    };
+    const draw = () => {
+      sortBtn.textContent = sortMode === 'count' ? 'Most common first' : 'A → Z';
+      const shown = visible().sort(sortMode === 'count' ? (a, b) => b.n - a.n
+        : (a, b) => display(a.v).localeCompare(display(b.v), undefined, { numeric: true }));
+      all.checked = shown.length > 0 && shown.every((en) => en.checked);
+      list.replaceChildren(...shown.slice(0, 1000).map((en) => h('label', { class: 'check' },
+        h('input', { type: 'checkbox', checked: en.checked, onchange: (e) => { en.checked = e.target.checked; all.checked = visible().every((x) => x.checked); } }),
+        h('span', { class: 'value' + (en.v === null ? ' muted' : '') }, display(en.v, 80)),
+        h('span', { class: 'n' }, fmt(en.n)))));
+      if (!shown.length && entries.length) list.replaceChildren(h('p', { class: 'muted pad' }, 'No values match.'));
+    };
+    const load = async () => {
+      list.replaceChildren(h('p', { class: 'muted pad' }, full ? 'Reading every row…' : 'Loading values…'));
+      try {
+        const r = await query(
+          `SELECT v, COUNT(*) FROM (SELECT ${qi(col.name)} AS v FROM (${source.unsortedSql})${full ? '' : ` LIMIT ${VALUES_SAMPLE}`}) GROUP BY v ORDER BY 2 DESC LIMIT 1001`,
+          source.params, 'values', 1001, 'Reading values');
+        const had = new Map(entries.map((en) => [key(en.v), en.checked]));
+        entries = r.rows.slice(0, 1000).map(([v, n]) => ({
+          v, n,
+          checked: had.has(key(v)) ? had.get(key(v)) : exSet ? (exCond.negate ? !exSet.has(key(v)) : exSet.has(key(v))) : true,
+        }));
+        const sampled = !full && (lastTotal == null || lastTotal > VALUES_SAMPLE);
+        note.replaceChildren(
+          r.rows.length > 1000 ? 'The 1,000 most common values' : `${fmt(entries.length)} different values`,
+          sampled ? ' in the first ' + fmt(VALUES_SAMPLE) + ' rows. ' : '. ',
+          sampled ? h('button', { class: 'link', onclick: () => { full = true; load(); } }, 'Check all rows') : null);
+        draw();
+      } catch (e) {
+        if (!(e instanceof CancelledError)) list.replaceChildren(h('p', { class: 'error' }, e.message));
+      }
+    };
+    const apply = () => {
+      const keep = entries.filter((en) => en.checked).map((en) => en.v);
+      const drop = entries.filter((en) => !en.checked).map((en) => en.v);
+      closeLayer();
+      if (!drop.length) { // everything ticked: no filter
+        if (existing) deleteStep(vi);
+        return;
+      }
+      // Store whichever list is shorter; "not one of" also keeps values that
+      // weren't listed (beyond the 1,000 shown), the way Excel does.
+      const cond = keep.length <= drop.length
+        ? { col: col.name, op: 'in', value: keep }
+        : { col: col.name, op: 'in', value: drop, negate: true };
+      const step = { type: 'filter', match: 'all', conditions: [cond] };
+      if (existing) replaceStep(vi, step);
+      else addStep(step);
+    };
+    popover(anchor, h('div', { class: 'pop-values' },
+      h('div', { class: 'row' }, search, sortBtn),
+      h('label', { class: 'check select-all' }, all, h('span', null, '(Select all)')),
+      list, note,
+      h('div', { class: 'row end' },
+        h('button', { class: 'ghost small', onclick: closeLayer }, 'Cancel'),
+        h('button', { class: 'primary small', onclick: apply }, 'OK'))));
+    load();
+    search.focus();
+  }
+
+  // ---------- cell menu ----------
+  function cellMenu(td, col, value, row, cols) {
+    const shown = display(value, 30);
+    const isNull = value === null || value === undefined;
+    const numeric = typeof value === 'number' || (value && value.$int != null);
+    const dateLike = typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value);
+    const items = [];
+    if (isNull) {
+      items.push({ icon: '=', label: 'Keep only empty', onclick: () => addFilter({ col: col.name, op: 'eq', value: null }) });
+      items.push({ icon: '≠', label: 'Remove empty', onclick: () => addFilter({ col: col.name, op: 'ne', value: null }) });
+    } else if (!(value && value.$blob != null)) {
+      items.push({ icon: '=', label: 'Keep only this value', onclick: () => addFilter({ col: col.name, op: 'eq', value }) });
+      items.push({ icon: '≠', label: 'Remove this value', onclick: () => addFilter({ col: col.name, op: 'ne', value }) });
+      if (numeric || dateLike) {
+        items.push({ icon: '≥', label: dateLike ? 'Keep this date or later' : 'Keep this or more', onclick: () => addFilter({ col: col.name, op: 'gte', value }) });
+        items.push({ icon: '≤', label: dateLike ? 'Keep this date or earlier' : 'Keep this or less', onclick: () => addFilter({ col: col.name, op: 'lte', value }) });
+      }
+      if (typeof value === 'string') {
+        items.push({ icon: '…', label: 'Keep values containing…', onclick: () => addFilter({ col: col.name, op: 'contains', value }, true) });
+      }
+    }
+
+    if (!isNull) {
+      // Follow keys: the parent record, and everywhere else this key is used.
+      const parent = P.parentOf(col, schema);
+      const related = P.relatedFor(col, schema);
+      if (parent || related.length) items.push('-', { heading: `Follow ${shown}` });
+      if (parent) {
+        items.push({ icon: '↗', label: `Open the ${parent.table} record`, hint: `${parent.column} = ${shown}`, onclick: () => inspect(parent.table, parent.column, value) });
+      }
+      related.slice(0, 10).forEach((r, k) => {
+        items.push({
+          icon: '⇢', label: `Find in ${r.table}`, hint: `where ${r.column} = ${shown}`,
+          badge: cappedCount(r.table, r.column, value, 'menu' + k), badgeText: '…',
+          onclick: () => openQuery([{ type: 'source', table: r.table },
+            { type: 'filter', match: 'all', conditions: [{ col: r.column, op: 'eq', value }] }], `${r.table} · ${r.column} = ${display(value, 20)}`),
+        });
+      });
+    }
+
+    // Inspect the whole row, if we can tell which record it is.
+    const keyCol = cols.findIndex((c) => c.prov && c.prov.table === (col.prov && col.prov.table) && P.primaryKey(c.prov.table, schema) === c.prov.column);
+    const anyKey = keyCol >= 0 ? keyCol : cols.findIndex((c) => c.prov && P.primaryKey(c.prov.table, schema) === c.prov.column);
+    if (anyKey >= 0 && row[anyKey] != null) {
+      const kc = cols[anyKey];
+      items.push('-', { icon: '◎', label: `Inspect this ${kc.prov.table} record`, hint: 'all its fields and linked records', onclick: () => inspect(kc.prov.table, kc.prov.column, row[anyKey]) });
+    }
+    items.push('-', { icon: '⧉', label: 'Copy value', disabled: isNull, onclick: () => navigator.clipboard.writeText(display(value)).then(() => toast('Copied')) });
+    menu(td, items, `${col.name} = ${shown}`);
+  }
+
+  // ---------- choose / expand columns ----------
+  function checklist(names, checked, labelFor) {
+    const state = new Map(names.map((n) => [n, checked(n)]));
+    const search = h('input', { type: 'search', placeholder: 'Find a column…', oninput: () => draw() });
+    const list = h('div', { class: 'check-list' });
+    const draw = () => {
+      const s = search.value.trim().toLowerCase();
+      list.replaceChildren(...names.filter((n) => n.toLowerCase().includes(s)).map((n) => h('label', { class: 'check' },
+        h('input', { type: 'checkbox', checked: state.get(n), onchange: (e) => state.set(n, e.target.checked) }),
+        h('span', null, labelFor ? labelFor(n) : n))));
+    };
+    const setAll = (v) => { names.forEach((n) => state.set(n, v)); draw(); };
+    draw();
+    const el = h('div', null,
+      h('div', { class: 'row' }, search,
+        h('button', { class: 'ghost small', onclick: () => setAll(true) }, 'All'),
+        h('button', { class: 'ghost small', onclick: () => setAll(false) }, 'None')),
+      list);
+    return { el, selected: () => names.filter((n) => state.get(n)) };
+  }
+
+  function chooseColumns(anchor, editIndex) {
+    const q = Q();
+    const at = editIndex ?? viewIndex(q) + 1;
+    const cols = colsBefore(q, at);
+    const current = editIndex != null ? new Set(q.steps[editIndex].keep) : new Set(compileView(q).cols.map((c) => c.name));
+    const pick = checklist(cols.map((c) => c.name), (n) => current.has(n));
+    popover(anchor, h('div', { class: 'pop-columns' },
+      h('p', { class: 'muted small' }, 'Columns to keep:'), pick.el,
+      h('div', { class: 'row end' },
+        h('button', { class: 'ghost small', onclick: closeLayer }, 'Cancel'),
+        h('button', { class: 'primary small', onclick: () => {
+          const keep = pick.selected();
+          if (!keep.length) return toast('Keep at least one column.', true);
+          closeLayer();
+          const step = { type: 'columns', keep };
+          if (editIndex != null) replaceStep(editIndex, step);
+          else addStep(step, { combine: (prev) => (prev.type === 'columns' || prev.type === 'remove' ? step : null) });
+        } }, 'OK'))));
+  }
+
+  // Power Query's "expand" on a key column: pick which of the linked table's columns to bring in.
+  function expandPicker(anchor, link, editIndex) {
+    if (!link) return;
+    const q = Q();
+    const target = schema.tables[link.table];
+    const keys = new Set(link.pairs.map((p) => p[1]));
+    const existing = editIndex != null ? q.steps[editIndex] : null;
+    const names = target.columns.map((c) => c.name);
+    const pick = checklist(names, (n) => (existing ? (existing.columns || names).includes(n) : !keys.has(n)));
+    const prefix = h('input', { type: 'checkbox', checked: existing ? existing.prefix !== '' : true });
+    popover(anchor, h('div', { class: 'pop-columns' },
+      h('p', { class: 'small' }, h('strong', null, link.table), h('span', { class: 'muted' }, ` via ${link.pairs.map((p) => p[0]).join(', ')}`)),
+      pick.el,
+      h('label', { class: 'check' }, prefix, h('span', { class: 'small' }, `Start new column names with “${link.table}.”`)),
+      h('div', { class: 'row end' },
+        h('button', { class: 'ghost small', onclick: closeLayer }, 'Cancel'),
+        h('button', { class: 'primary small', onclick: () => {
+          const columns = pick.selected();
+          if (!columns.length) return toast('Choose at least one column.', true);
+          closeLayer();
+          const step = { type: 'link', table: link.table, pairs: link.pairs, columns };
+          if (!prefix.checked) step.prefix = '';
+          if (editIndex != null) replaceStep(editIndex, step);
+          else addStep(step);
+        } }, editIndex != null ? 'Update' : 'Expand'))));
+  }
+
+  function linkMenu(anchor) {
+    const q = Q();
+    const links = P.outgoingLinks(compileView(q).cols || [], schema);
+    if (!links.length) return toast('Nothing here links to another table (no foreign keys). Try Merge instead.');
+    menu(anchor, links.map((l) => ({
+      icon: '⤢', label: l.table, hint: `via ${l.pairs.map((p) => p[0]).join(', ')}`,
+      onclick: () => expandPicker(anchor, l),
+    })), 'Expand a linked table');
+  }
+
+  // ---------- combine: merge / add figures / append ----------
+  function combineDialog(mode, editIndex, preset) {
+    const q = Q();
+    const at = editIndex ?? viewIndex(q) + 1;
+    const left = colsBefore(q, at);
+    const existing = editIndex != null ? clone(q.steps[editIndex]) : null;
+    const srcKey = (src) => (src.table ? 't:' + src.table : 'q:' + src.query);
+    const parseSrc = (k) => (k.startsWith('t:') ? { table: k.slice(2) } : { query: k.slice(2), name: queries.find((x) => x.id === k.slice(2))?.name });
+
+    const st = {
+      source: existing ? srcKey(existing.source) : preset ? 't:' + preset.related.table : '',
+      on: existing ? existing.on : preset ? [[preset.col, preset.related.column]] : [],
+      kind: existing?.kind || 'left',
+      columns: existing?.columns || null,
+      prefix: existing ? existing.prefix !== '' : true,
+      measures: existing?.measures || [{ fn: 'count' }],
+    };
+    const rightCols = () => {
+      if (!st.source) return [];
+      const src = parseSrc(st.source);
+      if (src.table) return P.compile([{ type: 'source', table: src.table }], schema).cols || [];
+      const other = queries.find((x) => x.id === src.query);
+      return other ? P.compile(other.steps, schema, null, ctxFor(other)).cols || [] : [];
+    };
+
+    const body = h('div', { class: 'combine' });
+    const check = h('div', { class: 'match-check muted small' });
+    const titles = { merge: 'Merge', lookup: 'Add figures from a related table', append: 'Append rows' };
+    const intro = {
+      merge: 'Join another table or query to this one, matching rows on columns you choose.',
+      lookup: 'Add a count, total or average from matching rows elsewhere, one figure per row here. Rows are never duplicated.',
+      append: 'Stack the rows of another table or query underneath these. Columns are matched by name.',
+    };
+
+    const draw = () => {
+      const rc = rightCols();
+      const sources = h('select', { onchange: (e) => {
+        st.source = e.target.value;
+        const src = parseSrc(st.source);
+        st.on = P.suggestMatches(left, rightCols(), schema, src.table).slice(0, 1);
+        if (!st.on.length && left.length && rightCols().length) st.on = [[left[0].name, rightCols()[0].name]];
+        st.columns = null;
+        draw();
+      } },
+      h('option', { value: '', disabled: true, selected: !st.source }, 'choose…'),
+      h('optgroup', { label: 'Tables' }, Object.values(schema.tables).filter((t) => t.type === 'table').map((t) => h('option', { value: 't:' + t.name, selected: st.source === 't:' + t.name }, t.name))),
+      Object.values(schema.tables).some((t) => t.type === 'view')
+        ? h('optgroup', { label: 'Views' }, Object.values(schema.tables).filter((t) => t.type === 'view').map((t) => h('option', { value: 't:' + t.name, selected: st.source === 't:' + t.name }, t.name))) : null,
+      queries.length > 1 ? h('optgroup', { label: 'Open queries' }, queries.filter((x) => x.id !== q.id).map((x) => h('option', { value: 'q:' + x.id, selected: st.source === 'q:' + x.id }, x.name))) : null);
+
+      const parts = [h('p', { class: 'muted' }, intro[mode]), h('div', { class: 'field' }, h('label', null, mode === 'append' ? 'Append' : 'With'), sources)];
+
+      if (st.source && mode !== 'append') {
+        const pairs = h('div', { class: 'pairs' }, st.on.map((pair, k) => h('div', { class: 'row' },
+          colSelect(left, pair[0], (v) => { pair[0] = v; draw(); }, 'column here…'),
+          h('span', { class: 'eq' }, '='),
+          colSelect(rc, pair[1], (v) => { pair[1] = v; draw(); }, 'column there…'),
+          st.on.length > 1 ? h('button', { class: 'x', onclick: () => { st.on.splice(k, 1); draw(); } }, '×') : null)));
+        const sugg = P.suggestMatches(left, rc, schema, parseSrc(st.source).table);
+        parts.push(h('div', { class: 'field' }, h('label', null, 'Match rows where'), pairs,
+          h('div', { class: 'row' },
+            h('button', { class: 'ghost small', onclick: () => { st.on.push(['', '']); draw(); } }, '+ Match on another column too'),
+            sugg.length > 1 ? h('span', { class: 'muted small' }, 'Suggested: ', sugg.slice(0, 4).map(([a, b]) => h('button', { class: 'link small', onclick: () => { st.on = [[a, b]]; draw(); } }, `${a} = ${b}`)).reduce((acc, el) => acc.concat(acc.length ? [', ', el] : [el]), [])) : null),
+          check));
+        testMatches();
+      }
+
+      if (st.source && mode === 'merge') {
+        const kinds = P.JOIN_KINDS.filter((k) => !k.minSqlite || sqliteAtLeast(k.minSqlite));
+        parts.push(h('div', { class: 'field' }, h('label', null, 'Keep'),
+          h('div', { class: 'kinds' }, kinds.map((k) => h('label', { class: 'kind' + (st.kind === k.id ? ' on' : '') },
+            h('input', { type: 'radio', name: 'kind', checked: st.kind === k.id, onchange: () => { st.kind = k.id; draw(); } }),
+            h('span', null, h('strong', null, k.label), h('span', { class: 'muted small' }, k.hint)))))));
+        if (st.kind !== 'anti') {
+          const matched = new Set(st.on.map((p) => p[1]));
+          const names = rc.map((c) => c.name);
+          const pick = checklist(names, (n) => (st.columns ? st.columns.includes(n) : !matched.has(n)));
+          st.pick = pick;
+          const srcName = P.sourceName(parseSrc(st.source));
+          parts.push(h('div', { class: 'field' }, h('label', null, 'Columns to bring in'), pick.el,
+            h('label', { class: 'check' },
+              h('input', { type: 'checkbox', checked: st.prefix, onchange: (e) => { st.prefix = e.target.checked; } }),
+              h('span', { class: 'small' }, `Start new column names with “${srcName}.”`))));
+        }
+      }
+
+      if (st.source && mode === 'lookup') {
+        const mbox = h('div');
+        measureRows(mbox, st.measures, rc, 'Show', () => {}, draw);
+        parts.push(h('div', { class: 'field' }, h('label', null, 'Figures to add'), mbox));
+      }
+
+      if (st.source && mode === 'append') {
+        const leftNames = new Set(left.map((c) => c.name));
+        const same = rc.filter((c) => leftNames.has(c.name)).map((c) => c.name);
+        const extra = rc.filter((c) => !leftNames.has(c.name)).map((c) => c.name);
+        const missing = left.filter((c) => !rc.some((r) => r.name === c.name)).map((c) => c.name);
+        parts.push(h('div', { class: 'append-info small' },
+          h('p', null, `${same.length} column${same.length === 1 ? ' matches' : 's match'} by name${same.length ? ': ' + same.slice(0, 8).join(', ') + (same.length > 8 ? '…' : '') : ''}.`),
+          extra.length ? h('p', null, `New columns (empty for the rows already here): ${extra.slice(0, 8).join(', ')}${extra.length > 8 ? '…' : ''}`) : null,
+          missing.length ? h('p', null, `Columns only here (empty for the appended rows): ${missing.slice(0, 8).join(', ')}${missing.length > 8 ? '…' : ''}`) : null,
+          !same.length ? h('p', { class: 'error' }, 'No columns have the same name, so the rows won’t line up. Rename columns first so they match.') : null));
+      }
+      body.replaceChildren(...parts);
+    };
+
+    // Power Query shows how many rows find a match; we check the first 1,000.
+    let checkTimer = null;
+    const testMatches = () => {
+      clearTimeout(checkTimer);
+      const src = st.source && parseSrc(st.source);
+      if (!src || !st.on.length || st.on.some(([a, b]) => !a || !b)) { check.textContent = ''; return; }
+      check.textContent = 'Checking matches…';
+      checkTimer = setTimeout(async () => {
+        const lq = P.compile(q.steps, schema, at - 1, ctxFor(q));
+        const right = src.table ? P.compile([{ type: 'source', table: src.table }], schema)
+          : P.compile(queries.find((x) => x.id === src.query).steps, schema, null, ctxFor(queries.find((x) => x.id === src.query)));
+        if (lq.error || right.error) { check.textContent = ''; return; }
+        const keys = st.on.map(([, b], i) => `${qi(b)} AS k${i}`).join(', ');
+        const on = st.on.map(([a], i) => `p.${qi(a)} = j.k${i}`).join(' AND ');
+        try {
+          const r = await query(
+            `SELECT COUNT(*), COUNT(j.k0) FROM (SELECT * FROM (${lq.unsortedSql}) LIMIT 1000) AS p LEFT JOIN (SELECT DISTINCT ${keys} FROM (${right.unsortedSql})) AS j ON ${on}`,
+            [...lq.params, ...right.params], 'matchcheck', 1);
+          const [n, m] = r.rows[0];
+          check.className = 'match-check small ' + (m === 0 ? 'bad' : 'good');
+          const of = n < 1000 ? `${fmt(n)} rows here` : `the first ${fmt(n)} rows here`;
+          check.textContent = n === 0 ? 'There are no rows here yet.'
+            : m === 0 ? `None of ${of} find a match. Check the columns.`
+              : m === n ? `All ${of.replace('the first ', '')} find a match.` : `${fmt(m)} of ${of} find a match.`;
+        } catch (e) {
+          if (!(e instanceof CancelledError)) { check.className = 'match-check small bad'; check.textContent = e.message; }
+        }
+      }, 250);
+    };
+
+    const ok = () => {
+      if (!st.source) return toast('Choose a table or query first.', true);
+      const source = parseSrc(st.source);
+      let step;
+      if (mode === 'append') step = { type: 'append', source };
+      else {
+        const on = st.on.filter(([a, b]) => a && b);
+        if (!on.length) return toast('Choose which columns to match on.', true);
+        if (mode === 'merge') {
+          step = { type: 'merge', source, kind: st.kind, on };
+          if (st.kind !== 'anti') step.columns = st.pick.selected();
+          if (!st.prefix) step.prefix = '';
+        } else {
+          step = { type: 'lookup', source, on, measures: st.measures };
+        }
+      }
+      closeDialog();
+      if (editIndex != null) replaceStep(editIndex, step);
+      else addStep(step);
+    };
+
+    dialog(titles[mode], body, [
+      h('button', { class: 'ghost', onclick: closeDialog }, 'Cancel'),
+      h('button', { class: 'primary', onclick: ok }, editIndex != null ? 'Update step' : 'Add step'),
+    ], 'combine-modal');
+    draw();
+  }
+
+  // ---------- record inspector ----------
+  const insp = { history: [], index: -1, seq: 0 };
+
+  function inspect(table, column, value) {
+    insp.history = insp.history.slice(0, insp.index + 1);
+    insp.history.push({ table, column, value });
+    insp.index = insp.history.length - 1;
+    renderInspector();
+  }
+
+  function closeInspector() {
+    $('inspector').hidden = true;
+    insp.history = [];
+    insp.index = -1;
+    document.body.classList.remove('inspecting');
+  }
+
+  async function renderInspector() {
+    const el = $('inspector');
+    const cur = insp.history[insp.index];
+    if (!cur) return closeInspector();
+    const seq = ++insp.seq;
+    const stale = () => seq !== insp.seq;
+    el.hidden = false;
+    document.body.classList.add('inspecting');
+    const { table, column, value } = cur;
+    const shown = display(value, 40);
+    const go = (d) => { insp.index += d; renderInspector(); };
+    const body = h('div', { class: 'insp-body' }, h('p', { class: 'muted pad' }, 'Loading…'));
+    el.replaceChildren(
+      h('div', { class: 'insp-head' },
+        h('button', { class: 'icon', title: 'Back', disabled: insp.index <= 0, onclick: () => go(-1) }, '←'),
+        h('button', { class: 'icon', title: 'Forward', disabled: insp.index >= insp.history.length - 1, onclick: () => go(1) }, '→'),
+        h('div', { class: 'insp-title' }, h('strong', null, table), h('span', { class: 'muted small' }, `${column} = ${shown}`)),
+        h('button', { class: 'icon x', title: 'Close', onclick: closeInspector }, '×')),
+      h('div', { class: 'insp-actions' },
+        h('button', { class: 'ghost small', onclick: () => openQuery([{ type: 'source', table },
+          { type: 'filter', match: 'all', conditions: [{ col: column, op: 'eq', value }] }], `${table} · ${column} = ${display(value, 20)}`) }, 'Open as a query')),
+      body);
+
+    let rec;
+    try {
+      rec = await query(`SELECT * FROM ${qi(table)} WHERE ${qi(column)} = ? LIMIT 2`, [value], 'insp', 2);
+    } catch (e) {
+      if (!stale() && !(e instanceof CancelledError)) body.replaceChildren(h('p', { class: 'error' }, e.message));
+      return;
+    }
+    if (stale()) return;
+    if (!rec.rows.length) { body.replaceChildren(h('p', { class: 'muted pad' }, `No ${table} record has ${column} = ${shown}.`)); return; }
+    const row = rec.rows[0];
+    const fields = h('table', { class: 'fields' }, rec.columns.map((name, k) => {
+      const v = row[k];
+      const parent = v != null ? P.parentOf({ prov: { table, column: name } }, schema) : null;
+      return h('tr', null, h('th', null, name), h('td', { class: v == null ? 'null' : typeof v === 'number' ? 'num' : '' },
+        parent ? h('button', { class: 'link', title: `Open ${parent.table} record`, onclick: () => inspect(parent.table, parent.column, v) }, display(v, 120), ' ↗') : display(v, 300)));
+    }));
+    const sections = [];
+    if (rec.more) sections.push(h('p', { class: 'muted small' }, `More than one record has ${column} = ${shown}; showing the first.`));
+    sections.push(h('h3', null, 'Fields'), fields);
+
+    // Everything that points at this record.
+    const refs = [];
+    rec.columns.forEach((name, k) => {
+      if (row[k] == null) return;
+      for (const r of P.referencesTo(table, name, schema)) refs.push({ ...r, key: name, value: row[k] });
+    });
+    if (refs.length) sections.push(h('h3', null, 'Linked records'));
+    else sections.push(h('p', { class: 'muted small' }, 'No other tables link to this record.'));
+    body.replaceChildren(...sections);
+
+    refs.slice(0, 12).forEach((r, k) => {
+      const count = h('span', { class: 'muted small' }, '…');
+      const preview = h('div', { class: 'insp-preview' }, h('p', { class: 'muted small pad' }, 'Loading…'));
+      const open = () => openQuery([{ type: 'source', table: r.table },
+        { type: 'filter', match: 'all', conditions: [{ col: r.column, op: 'eq', value: r.value }] }], `${r.table} · ${r.column} = ${display(r.value, 20)}`);
+      body.append(h('div', { class: 'insp-rel' },
+        h('div', { class: 'insp-rel-head' }, h('strong', null, r.table), h('span', { class: 'muted small' }, ` · ${r.column}`), h('span', { class: 'spacer' }), count,
+          h('button', { class: 'ghost small', onclick: open }, 'Open all')),
+        preview));
+      cappedCount(r.table, r.column, r.value, 'ic' + k).then((t) => { if (!stale()) count.textContent = t; }).catch(() => {});
+      query(`SELECT * FROM ${qi(r.table)} WHERE ${qi(r.column)} = ? LIMIT 5`, [r.value], 'ip' + k, 5).then((res) => {
+        if (stale()) return;
+        if (!res.rows.length) { preview.replaceChildren(h('p', { class: 'muted small pad' }, 'None.')); return; }
+        const pk = P.primaryKey(r.table, schema);
+        const pkIdx = res.columns.indexOf(pk);
+        preview.replaceChildren(h('table', { class: 'grid mini' },
+          h('thead', null, h('tr', null, res.columns.map((c) => h('th', null, c)))),
+          h('tbody', null, res.rows.map((rw) => {
+            const tr = h('tr', { class: pkIdx >= 0 ? 'clickable' : '', title: pkIdx >= 0 ? 'Inspect this record' : '' }, rw.map(cell));
+            if (pkIdx >= 0) tr.addEventListener('click', () => inspect(r.table, pk, rw[pkIdx]));
+            return tr;
+          }))),
+        ...(res.more ? [h('button', { class: 'link small', onclick: open }, 'See all')] : []));
+      }).catch((e) => { if (!stale() && !(e instanceof CancelledError)) preview.replaceChildren(h('p', { class: 'error small' }, e.message)); });
+    });
+  }
+
+  // ---------- SQL tab ----------
   const userSql = () => $('sql-input').value.trim().replace(/;+\s*$/, '');
+
+  function setSqlMode() {
+    activeId = 'sql';
+    closeLayer();
+    save();
+    renderAll();
+    $('grid').replaceChildren();
+    $('pager').replaceChildren();
+    $('result-count').textContent = '';
+    showResultError(null);
+    if (!$('sql-input').value.trim()) {
+      const t = Object.keys(schema.tables)[0];
+      if (t) $('sql-input').value = `SELECT * FROM ${qi(t)}`;
+    }
+    $('sql-input').focus();
+    runSql();
+  }
 
   async function runSql() {
     showResultError(null);
     const sql = userSql();
     if (!sql) return;
     const seq = ++refreshSeq;
-    const stale = () => seq !== refreshSeq || mode !== 'sql';
+    const stale = () => seq !== refreshSeq || activeId !== 'sql';
     $('result-count').replaceChildren(h('span', { class: 'muted' }, 'Running…'));
     setLoading(true);
     try {
-      const r = await query(sql, [], 'sql', SQL_PREVIEW_ROWS);
+      const r = await query(sql, [], 'sql', SQL_PREVIEW_ROWS, 'Running query');
       if (stale()) return;
-      renderGrid(r.columns, r.rows, false);
+      renderGrid(r.columns, r.rows);
       $('pager').replaceChildren();
       if (!r.more) {
         $('result-count').textContent = `${fmt(r.rows.length)} ${r.rows.length === 1 ? 'row' : 'rows'}`;
         return;
       }
       $('result-count').textContent = `Showing the first ${fmt(r.rows.length)} rows (counting the rest…)`;
-      query(`SELECT COUNT(*) FROM (${sql})`, [], 'sqlcount', 1).then((c) => {
+      query(`SELECT COUNT(*) FROM (${sql})`, [], 'sqlcount', 1, 'Counting rows').then((c) => {
         if (!stale()) $('result-count').textContent = `${fmt(c.rows[0][0])} rows · showing the first ${fmt(r.rows.length)}; the download includes them all`;
       }).catch(() => {
         if (!stale()) $('result-count').textContent = `Showing the first ${fmt(r.rows.length)} rows; the download includes them all`;
       });
     } catch (e) {
-      if (!(e instanceof CancelledError) && !stale()) showResultError(e.message);
+      if (stale()) return;
+      if (e instanceof CancelledError && userCancelled.delete('sql')) { showStopped(runSql); $('result-count').textContent = ''; }
+      else if (!(e instanceof CancelledError)) showResultError(e.message);
     } finally {
       if (!stale()) setLoading(false);
-    }
-  }
-
-  function setMode(m) {
-    mode = m;
-    refreshSeq++;
-    $('tab-explore').classList.toggle('active', m === 'explore');
-    $('tab-sql').classList.toggle('active', m === 'sql');
-    $('explore-panel').hidden = m !== 'explore';
-    $('sql-panel').hidden = m !== 'sql';
-    $('btn-show-sql').hidden = m !== 'explore';
-    $('sql-preview').hidden = m !== 'explore' || !sqlShown;
-    closePopover();
-    setLoading(false);
-    if (m === 'sql') {
-      if (!$('sql-input').value.trim() && current) $('sql-input').value = `SELECT * FROM ${qi(current)}`;
-      $('grid').replaceChildren();
-      $('pager').replaceChildren();
-      $('result-count').textContent = '';
-      showResultError(null);
-      $('sql-input').focus();
-      runSql();
-    } else {
-      refresh();
     }
   }
 
@@ -693,23 +1465,20 @@
     const panel = $('export-panel');
     const status = $('export-status');
     const bar = $('export-bar');
-    const cancel = $('btn-export-cancel');
     panel.hidden = false;
     status.textContent = 'Starting export…';
     bar.style.width = '0%';
     bar.parentElement.classList.toggle('indeterminate', !expectedRows);
-    cancel.hidden = false;
     try {
       const { token } = await api('export', { id: db.id, sheets, filename });
-      cancel.onclick = () => { api(`export/${token}/cancel`, {}).catch(() => {}); status.textContent = 'Cancelling…'; };
+      $('btn-export-cancel').onclick = () => { api(`export/${token}/cancel`, {}).catch(() => {}); status.textContent = 'Cancelling…'; };
       for (;;) {
         await new Promise((r) => setTimeout(r, 400));
         const s = await api(`export/${token}`);
         if (s.state === 'running') {
-          const pct = expectedRows ? Math.min(100, (s.rows / expectedRows) * 100) : null;
           status.textContent = `Writing ${sheets.length > 1 && s.sheet ? `“${s.sheet}”… ` : ''}${fmt(s.rows)} rows` +
             (expectedRows ? ` of ${fmt(expectedRows)}` : '') + ' so far';
-          if (pct != null) bar.style.width = pct.toFixed(1) + '%';
+          if (expectedRows) bar.style.width = Math.min(100, (s.rows / expectedRows) * 100).toFixed(1) + '%';
           continue;
         }
         if (s.state === 'done') {
@@ -733,17 +1502,16 @@
   }
 
   const exportCurrent = withErrors(async () => {
-    if (mode === 'sql') {
+    if (activeId === 'sql') {
       const sql = userSql();
-      if (!sql) return;
-      await startExport([{ name: 'Query', sql, params: [] }], `query-${today()}.xlsx`, null);
+      if (sql) await startExport([{ name: 'Query', sql, params: [] }], `query-${today()}.xlsx`, null);
       return;
     }
-    const st = S();
-    const q = build(st, schema);
-    if (!q) return toast('Choose at least one column first.', true);
-    const name = st.summary.on ? `${st.table} summary` : st.table;
-    await startExport([{ name, sql: q.sql, params: q.params, columns: q.labels }], `${name}-${today()}.xlsx`, lastTotal);
+    const q = Q();
+    if (!q) return;
+    const c = compileView(q);
+    if (c.error && c.error.step <= viewIndex(q)) return toast('Fix the step with a problem first.', true);
+    await startExport([{ name: q.name, sql: c.sql, params: c.params, columns: c.cols.map((x) => x.name) }], `${q.name}-${today()}.xlsx`, lastTotal);
   });
 
   const exportAll = withErrors(async () => {
@@ -753,22 +1521,15 @@
     const total = known ? tables.reduce((n, t) => n + t.rowCount, 0) : null;
     if (total != null && total > 5_000_000 &&
         !confirm(`That's ${fmt(total)} rows across ${tables.length} tables, which will make a very large Excel file and take a while. Continue?`)) return;
-    const sheets = tables.map((t) => ({ name: t.name, sql: `SELECT * FROM ${qi(t.name)}`, params: [] }));
-    await startExport(sheets, `${db.name.replace(/\.[^.]+$/, '')}-${today()}.xlsx`, total);
+    await startExport(tables.map((t) => ({ name: t.name, sql: `SELECT * FROM ${qi(t.name)}`, params: [] })),
+      `${db.name.replace(/\.[^.]+$/, '')}-${today()}.xlsx`, total);
   });
 
-  // ---------- toast ----------
-  let toastTimer = null;
-  function toast(msg, isError, ms) {
-    const t = $('toast');
-    t.textContent = msg;
-    t.classList.toggle('error', !!isError);
-    t.hidden = false;
-    clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { t.hidden = true; }, ms || (isError ? 6000 : 3500));
+  // ---------- wiring ----------
+  function needQuery(fn) {
+    return (e) => { if (Q()) fn(e); };
   }
 
-  // ---------- wiring ----------
   function init() {
     $('path-form').hidden = !canOpenByPath;
     $('path-unavailable').hidden = canOpenByPath;
@@ -779,43 +1540,38 @@
       await openPath(p);
     }));
     $('btn-sample').addEventListener('click', withErrors(() => openPath(samplePath)));
-
     $('btn-close').addEventListener('click', showLanding);
-    $('btn-reload').addEventListener('click', withErrors(async () => {
-      await openPath(db.path, true);
-      toast('Reloaded');
-    }));
+    $('btn-reload').addEventListener('click', withErrors(async () => { await openPath(db.path, true); toast('Reloaded'); }));
     $('btn-export-all').addEventListener('click', exportAll);
     $('btn-export').addEventListener('click', exportCurrent);
     $('table-search').addEventListener('input', renderTableList);
 
-    $('tab-explore').addEventListener('click', () => setMode('explore'));
-    $('tab-sql').addEventListener('click', () => setMode('sql'));
     $('btn-run-sql').addEventListener('click', runSql);
+    $('btn-activity-cancel').addEventListener('click', cancelActivity);
     $('sql-input').addEventListener('keydown', (e) => {
       if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); runSql(); }
     });
 
-    $('btn-columns').addEventListener('click', (e) => togglePopover(e.currentTarget, columnsPopover));
-    $('btn-links').addEventListener('click', (e) => togglePopover(e.currentTarget, linksPopover));
-    $('btn-add-filter').addEventListener('click', () => {
-      const st = S();
-      st.filters.push({ key: availableColumns(st, schema)[0].key, op: 'contains', value: '', value2: '' });
-      renderFilters();
-      const inputs = $('filters').querySelectorAll('.filter-row:last-child input');
-      if (inputs.length) inputs[0].focus();
-    });
-    $('summary-toggle').addEventListener('change', (e) => {
-      S().summary.on = e.target.checked;
-      renderBuilder();
-      changed();
-    });
-    $('btn-reset').addEventListener('click', () => {
-      tableStates.set(current, newState(current));
-      closePopover();
-      renderBuilder();
-      changed();
-    });
+    // Toolbar
+    $('t-columns').addEventListener('click', needQuery((e) => chooseColumns(e.currentTarget)));
+    $('t-link').addEventListener('click', needQuery((e) => linkMenu(e.currentTarget)));
+    $('t-filter').addEventListener('click', needQuery(() => {
+      const cols = compileView(Q()).cols || [];
+      addFilter({ col: cols[0]?.name, op: 'contains', value: '' }, true);
+    }));
+    $('t-distinct').addEventListener('click', needQuery(() => addStep({ type: 'distinct' })));
+    $('t-top').addEventListener('click', needQuery(() => addStep({ type: 'top', n: 100 }, { edit: true })));
+    $('t-group').addEventListener('click', needQuery(() => {
+      const cols = compileView(Q()).cols || [];
+      const guess = cols.find((c) => c.affinity === 'TEXT' && !/(^|_)id$/i.test(c.name));
+      addStep({ type: 'group', by: guess ? [guess.name] : [], measures: [{ fn: 'count' }] }, { edit: true });
+    }));
+    $('t-merge').addEventListener('click', needQuery(() => combineDialog('merge')));
+    $('t-lookup').addEventListener('click', needQuery(() => combineDialog('lookup')));
+    $('t-append').addEventListener('click', needQuery(() => combineDialog('append')));
+
+    $('btn-undo').addEventListener('click', undo);
+    $('btn-duplicate').addEventListener('click', needQuery(() => { const q = Q(); openQuery(clone(q.steps), q.name); }));
     $('btn-show-sql').addEventListener('click', () => {
       sqlShown = !sqlShown;
       $('sql-preview').hidden = !sqlShown;
@@ -823,27 +1579,22 @@
     });
     $('btn-edit-sql').addEventListener('click', () => {
       $('sql-input').value = $('sql-preview-text').textContent;
-      setMode('sql');
+      setSqlMode();
     });
 
-    document.addEventListener('mousedown', (e) => {
-      const pop = $('popover');
-      if (pop.hidden || pop.contains(e.target)) return;
-      if (e.target.closest('#' + (pop.dataset.anchor || '_'))) return;
-      closePopover();
+    document.addEventListener('keydown', (e) => {
+      const typing = e.target.closest('input, textarea, select');
+      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey && !typing && Q()) { e.preventDefault(); undo(); }
+      if (e.key === 'Escape' && !document.querySelector('.layer, .modal-backdrop') && !$('inspector').hidden) closeInspector();
     });
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closePopover(); });
-    window.addEventListener('resize', closePopover);
 
     renderRecent();
     if (canOpenByPath) {
-      api('startup')
-        .then((d) => {
-          samplePath = d.samplePath;
-          $('btn-sample').hidden = !samplePath;
-          if (d.path) return withErrors(openPath)(d.path);
-        })
-        .catch(() => {});
+      api('startup').then((d) => {
+        samplePath = d.samplePath;
+        $('btn-sample').hidden = !samplePath;
+        if (d.path) return withErrors(openPath)(d.path);
+      }).catch(() => {});
     } else {
       $('btn-sample').hidden = true;
     }
