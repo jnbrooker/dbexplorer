@@ -9,6 +9,8 @@ disk row by row. Standard library only - nothing to install.
     python3 dbexplorer.py                      # then type a path in the page
     python3 dbexplorer.py ~/data/sales.sqlite  # open this database straight away
 
+(On Windows, type python instead of python3.)
+
 The database is opened read-only and never modified.
 """
 
@@ -27,6 +29,7 @@ import tempfile
 import threading
 import time
 import urllib.parse
+import urllib.request
 import webbrowser
 
 from xlsx_writer import XlsxWriter
@@ -48,12 +51,15 @@ class Cancelled(Exception):
 # ---------------------------------------------------------------- opening
 
 def clean_path(raw):
-    """Accept paths however they were copied: quoted, with backslash-escaped
-    spaces (dragged into Terminal), with ~, or as a file:// URL."""
+    """Accept paths however they were copied: quoted (Windows "Copy as path"),
+    with backslash-escaped spaces (dragged into a Mac Terminal), with ~, or as
+    a file:// URL."""
     p = raw.strip()
     if p.startswith("file://"):
-        p = urllib.parse.unquote(urllib.parse.urlparse(p).path)
-    elif "\\ " in p or p[:1] in "'\"":
+        p = urllib.request.url2pathname(urllib.parse.urlparse(p).path)  # handles file:///C:/... on Windows
+    elif len(p) > 1 and p[0] in "'\"" and p[-1] == p[0]:
+        p = p[1:-1]  # just drop the quotes: shlex would eat Windows backslashes
+    elif os.name != "nt" and "\\ " in p:
         try:
             parts = shlex.split(p)
             if len(parts) == 1:

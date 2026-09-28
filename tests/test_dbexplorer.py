@@ -162,8 +162,15 @@ class ReadOnly(unittest.TestCase):
     def test_paths_are_cleaned(self):
         home = os.path.expanduser("~")
         self.assertEqual(dbexplorer.clean_path("'~/a b.db'"), os.path.join(home, "a b.db"))
-        self.assertEqual(dbexplorer.clean_path("~/a\\ b.db"), os.path.join(home, "a b.db"))
-        self.assertEqual(dbexplorer.clean_path("file:///tmp/a%20b.db"), "/tmp/a b.db")
+        if os.name == "nt":
+            # File Explorer's "Copy as path", including network shares
+            self.assertEqual(dbexplorer.clean_path('"C:\\My Data\\a.db"'), "C:\\My Data\\a.db")
+            self.assertEqual(dbexplorer.clean_path('"\\\\server\\share\\a.db"'), "\\\\server\\share\\a.db")
+            self.assertEqual(dbexplorer.clean_path("file:///C:/data/a%20b.db"), "C:\\data\\a b.db")
+        else:
+            # dragged into a Mac Terminal
+            self.assertEqual(dbexplorer.clean_path("~/a\\ b.db"), os.path.join(home, "a b.db"))
+            self.assertEqual(dbexplorer.clean_path("file:///tmp/a%20b.db"), "/tmp/a b.db")
 
     def test_not_a_database(self):
         with self.assertRaisesRegex(ValueError, "not a SQLite database"):

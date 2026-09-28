@@ -1753,6 +1753,45 @@
       `${db.name.replace(/\.[^.]+$/, '')}-${today()}.xlsx`, total);
   });
 
+  // ---------- hideable side panels ----------
+  // Open by default; each viewer's choice is remembered in this browser.
+  function setPanel(id, hidden) {
+    $(id).classList.toggle('collapsed', hidden);
+    try {
+      const saved = JSON.parse(localStorage.getItem('dbx.hiddenPanels') || '{}');
+      saved[id] = hidden;
+      localStorage.setItem('dbx.hiddenPanels', JSON.stringify(saved));
+    } catch (_) { /* storage unavailable: just don't remember */ }
+  }
+
+  // ---------- Mac vs Windows wording ----------
+  // Shows the right keys (⌘ or Ctrl) and file-path tips for this computer.
+  // Anything that isn't a Mac gets the Windows wording, which also suits Linux.
+  const isMac = /mac|iphone|ipad/i.test(navigator.userAgentData?.platform || navigator.platform || navigator.userAgent);
+  const modKey = isMac ? '⌘' : 'Ctrl';
+
+  function initPlatform() {
+    document.documentElement.dataset.os = isMac ? 'mac' : 'win';
+    $('path-input').placeholder = isMac ? '/Users/you/Documents/sales.sqlite' : 'C:\\Users\\you\\Documents\\sales.sqlite';
+    document.querySelectorAll('.mod-key').forEach((k) => { k.textContent = modKey; });
+    document.querySelectorAll('[data-shortcut]').forEach((b) => { b.title += ` (${isMac ? '⌘' : 'Ctrl+'}${b.dataset.shortcut})`; });
+  }
+
+  function initPanels() {
+    const edge = { 'tables-panel': ['left', 'right'], 'steps-panel': ['right', 'left'] }; // [hide, show] arrows
+    document.querySelectorAll('.panel-hide').forEach((b) => {
+      b.append(icon(edge[b.dataset.panel][0]));
+      b.addEventListener('click', () => setPanel(b.dataset.panel, true));
+    });
+    document.querySelectorAll('.panel-rail').forEach((b) => {
+      b.replaceChildren(icon(edge[b.dataset.panel][1]), h('span', { class: 'rail-text' }, b.textContent));
+      b.addEventListener('click', () => setPanel(b.dataset.panel, false));
+    });
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem('dbx.hiddenPanels') || '{}') || {}; } catch (_) { /* ignore */ }
+    for (const id of Object.keys(edge)) $(id).classList.toggle('collapsed', saved[id] === true);
+  }
+
   // ---------- wiring ----------
   function needQuery(fn) {
     return (e) => { if (Q()) fn(e); };
@@ -1773,6 +1812,8 @@
     $('btn-export-all').addEventListener('click', exportAll);
     $('btn-export').addEventListener('click', exportCurrent);
     $('btn-export-more').addEventListener('click', (e) => exportMenu(e.currentTarget));
+    initPanels();
+    initPlatform();
     setBasket([]);
     $('table-search').addEventListener('input', renderTableList);
 

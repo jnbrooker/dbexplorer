@@ -25,14 +25,16 @@
       <form id="path-form" class="path-form">
         <label for="path-input">File path</label>
         <div class="row">
-          <input id="path-input" type="text" placeholder="/Users/you/Documents/sales.sqlite" autocomplete="off" spellcheck="false">
+          <input id="path-input" type="text" placeholder="" autocomplete="off" spellcheck="false">
           <button type="submit" class="primary">Open</button>
         </div>
-        <p class="hint">In Finder, select the file and press <kbd>⌥</kbd><kbd>⌘</kbd><kbd>C</kbd> to copy its path, then paste it here.</p>
+        <p class="hint" data-os="mac">In Finder, select the file and press <kbd>⌥</kbd><kbd>⌘</kbd><kbd>C</kbd> to copy its path, then paste it here.</p>
+        <p class="hint" data-os="win">In File Explorer, select the file and press <kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>C</kbd> (or right-click it and choose <em>Copy as path</em>), then paste it here.</p>
       </form>
       <p id="path-unavailable" class="notice" hidden>
-        DB Explorer needs its small helper program running. Start it from Terminal with
-        <code>python3 dbexplorer.py</code> and it will open this page for you.
+        DB Explorer needs its small helper program running.
+        <span data-os="mac">Start it from Terminal with <code>python3 dbexplorer.py</code></span><span data-os="win">Start it from Command Prompt with <code>python dbexplorer.py</code></span>
+        and it will open this page for you.
       </p>
 
       <div id="recent" class="recent" hidden>
@@ -46,8 +48,12 @@
   </main>
 
   <div id="workspace" class="workspace" hidden>
-    <aside class="sidebar">
-      <input id="table-search" type="search" placeholder="Find a table…" aria-label="Find a table">
+    <aside id="tables-panel" class="sidebar">
+      <button class="panel-rail" data-panel="tables-panel" title="Show tables">Tables</button>
+      <div class="sidebar-head">
+        <input id="table-search" type="search" placeholder="Find a table…" aria-label="Find a table">
+        <button class="icon panel-hide" data-panel="tables-panel" title="Hide tables" aria-label="Hide tables"></button>
+      </div>
       <nav id="table-list" class="table-list"></nav>
     </aside>
 
@@ -93,7 +99,7 @@
         <textarea id="sql-input" spellcheck="false" placeholder="SELECT * FROM customers WHERE …"></textarea>
         <div class="row">
           <button id="btn-run-sql" class="primary">Run</button>
-          <span class="muted small">Cmd/Ctrl + Enter to run. Read-only: nothing here can change the database.</span>
+          <span class="muted small"><kbd class="mod-key"></kbd><kbd>Enter</kbd> to run. Read-only: nothing here can change the database.</span>
         </div>
       </div>
 
@@ -130,10 +136,12 @@
     </section>
 
     <aside id="steps-panel" class="steps-panel">
+      <button class="panel-rail" data-panel="steps-panel" title="Show applied steps">Applied steps</button>
       <div class="steps-head">
         <h2>Applied steps</h2>
-        <button id="btn-undo" class="ghost small" title="Undo the last change (⌘Z)">Undo</button>
+        <button id="btn-undo" class="ghost small" title="Undo the last change" data-shortcut="Z">Undo</button>
         <button id="btn-duplicate" class="ghost small" title="Copy this query into a new tab">Duplicate</button>
+        <button class="icon panel-hide" data-panel="steps-panel" title="Hide applied steps" aria-label="Hide applied steps"></button>
       </div>
       <ol id="steps" class="steps"></ol>
       <p class="muted small steps-tip">Click a step to see the data at that point. New steps go after the one selected.</p>

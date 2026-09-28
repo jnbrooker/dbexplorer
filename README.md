@@ -10,12 +10,22 @@ nothing reformatted.
 python3 dbexplorer.py
 ```
 
-This opens the explorer in your browser. Type or paste the path to a database
-(in Finder: select the file, press ⌥⌘C, paste). Or open one straight away:
+On Windows, type `python` instead of `python3`.
+
+This opens the explorer in your browser. Type or paste the path to a database:
+
+- **Mac:** in Finder, select the file, press ⌥⌘C, then paste.
+- **Windows:** in File Explorer, select the file, press Ctrl+Shift+C (or
+  right-click it and choose *Copy as path*), then paste. The quotes it adds are fine.
+
+Or open one straight away:
 
 ```bash
 python3 dbexplorer.py ~/Documents/sales.sqlite
+python dbexplorer.py "C:\Users\you\Documents\sales.sqlite"
 ```
+
+Keyboard shortcuts are shown for your computer: ⌘ on a Mac, Ctrl on Windows.
 
 Needs only Python 3.8+ (standard library). Nothing to install. Nothing leaves
 your machine: the server listens on 127.0.0.1 only.
@@ -26,7 +36,7 @@ It's built like Power Query. Every change you make becomes a step in
 **Applied steps** on the right, such as *Source: orders → Merged with
 customers → Filtered: status = shipped → Sorted by date ↓*. Click a step to see
 the data at that point, edit it (✎), move it, or delete it. Steps apply in
-order, so a filter after a Group by filters the groups. **Undo** (⌘Z) steps
+order, so a filter after a Group by filters the groups. **Undo** (⌘Z / Ctrl+Z) steps
 back. Queries open as tabs and are remembered for each database.
 
 **Click the data instead of building filters.**

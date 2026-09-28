@@ -186,7 +186,23 @@ input[type=checkbox], input[type=radio] { accent-color: var(--green); }
   display: flex; flex-direction: column;
   min-height: 0;
 }
-.sidebar input { margin: 10px; background: var(--green-tint); border-color: var(--green-tint-2); }
+.sidebar-head { display: flex; align-items: center; gap: 2px; padding: 10px 6px 10px 10px; }
+.sidebar input { flex: 1; min-width: 0; background: var(--green-tint); border-color: var(--green-tint-2); }
+
+/* hideable side panels: collapse to a thin rail that brings them back */
+.panel-rail { display: none; }
+
+/* instructions that differ between Mac and Windows (html[data-os] is set by app.js) */
+html[data-os=mac] [data-os=win], html[data-os=win] [data-os=mac] { display: none; }
+.sidebar.collapsed, .steps-panel.collapsed { width: 30px; }
+.collapsed > :not(.panel-rail) { display: none; }
+.collapsed > .panel-rail {
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  flex: 1; width: 100%; padding: 10px 0; border: 0; border-radius: 0; background: none;
+  color: var(--muted); font-size: 11px; letter-spacing: .02em;
+}
+.collapsed > .panel-rail:hover { color: var(--text); background: var(--green-tint); }
+.panel-rail .rail-text { writing-mode: vertical-rl; }
 .table-list { overflow: auto; padding: 0 0 12px; }
 .list-heading { margin: 10px 10px 4px; }
 .table-item {
@@ -516,6 +532,9 @@ mark { background: var(--mark); color: inherit; padding: 0 1px; }
   .workspace { flex-direction: column; overflow: auto; }
   .sidebar { width: auto; max-height: 160px; border-right: 0; border-bottom: 1px solid var(--border); }
   .steps-panel { width: auto; max-height: 220px; border-left: 0; border-top: 1px solid var(--border); order: 3; }
+  .sidebar.collapsed, .steps-panel.collapsed { width: auto; }
+  .collapsed > .panel-rail { flex-direction: row; justify-content: center; padding: 6px 0; }
+  .panel-rail .rail-text { writing-mode: horizontal-tb; }
   .main { min-height: 70vh; }
   .db-name { display: none; }
   .kinds, .two-lists { grid-template-columns: 1fr; }
