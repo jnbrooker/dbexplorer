@@ -27,3 +27,6 @@ venv/
 ~$*.xlsx
 
 node_modules/
+
+# dashboards saved beside the sample database while developing
+examples/*.dashboards.json

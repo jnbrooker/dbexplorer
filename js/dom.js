@@ -36,11 +36,13 @@
     up: 'M12 19V5M6 11l6-6 6 6',
     down: 'M12 5v14M6 13l6 6 6-6',
     link: 'M7 17L17 7M9 7h8v8',
+    grip: 'M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01',
+    dash: 'M4 4h7v9H4zM13 4h7v5h-7zM13 11h7v9h-7zM4 15h7v5H4z',
   };
   function icon(name) {
     const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     svg.setAttribute('viewBox', '0 0 24 24');
-    svg.setAttribute('class', 'icon-svg' + (name === 'more' ? ' dots' : ''));
+    svg.setAttribute('class', 'icon-svg' + (name === 'more' || name === 'grip' ? ' dots' : ''));
     svg.setAttribute('aria-hidden', 'true');
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('d', ICONS[name]);

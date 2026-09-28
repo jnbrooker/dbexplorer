@@ -36,8 +36,8 @@ It's built like Power Query. Every change you make becomes a step in
 **Applied steps** on the right, such as *Source: orders → Merged with
 customers → Filtered: status = shipped → Sorted by date ↓*. Click a step to see
 the data at that point, edit it (✎), move it, or delete it. Steps apply in
-order, so a filter after a Group by filters the groups. **Remove all filters**
-under the steps deletes every filter step at once, and empties the search
+order, so a filter after a Group by filters the groups. **Remove all steps**
+under the steps takes you back to the plain table, and empties the search
 box (so does moving to another table). **Undo** (⌘Z / Ctrl+Z) steps
 back. Queries open as tabs and are remembered for each database.
 
@@ -98,6 +98,59 @@ you need them.
 Also: **Group by**, **Remove duplicates**, **Keep top rows**, **Choose
 columns**, **Show SQL** / **Write SQL**, and **Download as Excel**, which
 exports exactly the step you're looking at, every row.
+
+## Dashboards
+
+The **Dashboards** tab puts figures, charts, tables and maps on the front of
+any database. Every panel can be edited.
+
+- **Start quickly.** *Suggest a starter dashboard* works out what each column
+  is from a random sample of rows: dates, categories, names, measures and
+  coordinates, and what to leave alone (ids and codes such as UUIDs or
+  `venue|city` keys, copies like `city_norm` or `countryCode`, bookkeeping
+  like `loaded_at` or `source`, and mostly-empty columns). It builds one
+  dashboard about the database's main subject (its biggest table with dates
+  and things to group by) and lays it out to fill the screen. On a huge table
+  it only uses what an index makes fast: a chart of headliners groups by the
+  indexed `headliner_key` and shows the proper names from `headliner`, and the
+  map uses a smaller table with coordinates (venues, sized by their events).
+  Blanks never top a chart. *Add panel* lists more suggestions.
+  In Explore, **Add to dashboard** turns whatever you're looking at into a
+  panel; a query ending in a Group by becomes a chart of those groups.
+- **Edit any panel** with its pencil. A drawer on the right sets:
+  - what to *show as*: number (with a trend line and "+8% vs the period
+    before"), bars, columns, line, table (green/red shading), mix, a month
+    calendar, or a map;
+  - the *data*: a table or a copy of a query tab's steps; what to group by
+    (dates by day, week, month, quarter, year or day of the week); and the
+    figures (count, total, average, smallest, largest, number of different);
+  - the *look*: title, note, number format (£ $ € %), colours, sort, top N and
+    "Other";
+  - the *size*. **Edit layout** also lets you drag panels around and resize
+    them from the corner.
+- **Names, not ids.** A panel grouped by an id (`venue_id`) shows the names
+  it stands for ("O2 Arena"), looked up through the foreign key or, when none
+  is declared, a table named like the column (`venues`). The same goes for
+  controls, and you can search them by name.
+- **Controls** across the top (a date range, "venue = X") filter every panel
+  whose data has that column. Clicking a bar, a table row, a slice of a mix or
+  a month on a line chart sets them too; the chart you clicked keeps every
+  value and highlights your pick. A panel can opt out.
+- **Maps** find latitude and longitude columns by their names, and show a
+  heatmap or dots sized by any figure. Points are counted into a grid in the
+  database for the area on screen, so millions of rows arrive as a few
+  thousand cells. Drag to pan, scroll to zoom. A street map background is
+  one tick away; it loads map pictures from OpenStreetMap, so it's off until
+  you turn it on.
+- **Every panel is a query.** *Show SQL*, *Open in Explore* and *Download as
+  Excel* are in its menu.
+- **Light on the database.** Panels load only when they're on screen, share
+  three connections, reuse results they already have, and drop queued work
+  when a control changes. The toolbar shows what's loading, with Stop.
+
+Dashboards are saved to a small file beside the database,
+`<database>.dashboards.json`, so they travel with it. If that folder can't be
+written to, they're kept in the browser instead, and the toolbar says so.
 
 ## Design
 
@@ -160,6 +213,11 @@ writes, attaching other files and changing settings, so nothing typed into
 Write SQL can change your data. Each query sees the database as it is right
 now, including recent changes from other programs.
 
+The only file DB Explorer writes is `<database>.dashboards.json` beside the
+database, when you change a dashboard. Nothing else leaves your machine
+unless you turn on a map's street map background, which fetches map pictures
+of the area on screen from openstreetmap.org (not your data).
+
 The page and its API only answer on 127.0.0.1, only to requests from the page
 itself, not to other websites.
 
@@ -167,7 +225,7 @@ itself, not to other websites.
 
 ```bash
 python3 -m unittest discover tests             # server + Excel writer (openpyxl, if installed, adds round-trip checks)
-node --test                                    # query engine: steps -> SQL, run against the sample database
+node --test                                    # query engine and dashboard SQL, run against the sample database
 python3 scripts/make_sample.py                 # rebuild examples/sample.sqlite
 python3 scripts/make_sample.py --big 4000000 /tmp/big.sqlite   # ~10M-row test database
 ```
@@ -176,5 +234,6 @@ python3 scripts/make_sample.py --big 4000000 /tmp/big.sqlite   # ~10M-row test d
 - `xlsx_writer.py`: streaming, typed Excel writer
 - `index.html`, `css/`, `js/app.js`: the interface
 - `js/pipeline.js`: the query engine; turns applied steps into SQL and knows the relationships between tables (values are always bound parameters)
+- `js/dashboard.js`: the Dashboards tab; panel SQL (tested with node), charts, maps and the editor drawer
 - `js/dom.js`: small UI toolkit (menus, popovers, dialogs)
 - `examples/sample.sqlite`: demo database full of values spreadsheets like to mangle

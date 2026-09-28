@@ -31,8 +31,9 @@
   let schema = null;
   let samplePath = null;
   let queries = []; // { id, name, steps, view (step index or null = last), page, editing, undo: [] }
-  let activeId = null; // a query id, or 'sql'
+  let activeId = null; // a query id, 'sql' or 'dash'
   let sqlShown = false;
+  let dash = null; // the Dashboards tab (js/dashboard.js)
   const countCache = new Map();
 
   const Q = () => queries.find((q) => q.id === activeId) || null;
@@ -128,7 +129,7 @@
     const out = {};
     for (const t of tables) {
       out[t.name] = {
-        name: t.name, type: t.type, rawFks: t.fks, fks: [], rowCount: null, estimate: t.estimate,
+        name: t.name, type: t.type, rawFks: t.fks, fks: [], rowCount: null, estimate: t.estimate, indexed: t.indexed || [],
         columns: t.columns.map((c) => ({ ...c, affinity: P.affinity(c.type) })),
       };
     }
@@ -264,15 +265,13 @@
     commit();
   }
 
-  // Delete every filter step, keeping the view on the same step where it survives.
-  function removeFilters() {
+  // Back to just the source table, as one change (Undo brings the steps back).
+  function removeAllSteps() {
     const q = Q();
-    if (!q || !q.steps.some((s) => s.type === 'filter')) return;
+    if (!q || q.steps.length < 2) return;
     snapshot(q);
-    const vi = viewIndex(q);
-    const kept = q.steps.filter((s, i) => i <= vi && s.type !== 'filter').length - 1;
-    q.steps = q.steps.filter((s) => s.type !== 'filter');
-    q.view = q.view == null || kept >= q.steps.length - 1 ? null : kept;
+    q.steps = q.steps.slice(0, 1);
+    q.view = null;
     q.editing = null;
     q.page = 0;
     clearSearch();
@@ -329,7 +328,7 @@
       queries = d.queries
         .filter((q) => Array.isArray(q.steps) && q.steps.length && q.steps[0].type === 'source')
         .map((q) => ({ ...q, page: 0, editing: null, undo: [] }));
-      activeId = d.active === 'sql' || queries.some((q) => q.id === d.active) ? d.active : queries[0]?.id || null;
+      activeId = d.active === 'sql' || d.active === 'dash' || queries.some((q) => q.id === d.active) ? d.active : queries[0]?.id || null;
       return queries.length > 0;
     } catch (_) {
       return false;
@@ -353,6 +352,7 @@
       btn.textContent = 'Open';
     }
     countCache.clear();
+    dash.load();
     if (!keep) {
       setBasket([]);
       queries = [];
@@ -420,6 +420,7 @@
 
   // ---------- screens ----------
   function showLanding() {
+    dash.hide();
     db = null; schema = null; queries = []; activeId = null;
     countCache.clear();
     setBasket([]);
@@ -446,11 +447,15 @@
 
   function renderAll() {
     const sql = activeId === 'sql';
+    const onDash = activeId === 'dash';
     $('explore-panel').hidden = sql || !Q();
     $('sql-panel').hidden = !sql;
     $('steps-panel').hidden = sql || !Q();
     $('facets-panel').hidden = sql || !Q();
+    $('results').hidden = onDash;
     $('btn-show-sql').hidden = sql;
+    $('btn-to-dash').hidden = sql;
+    if (onDash) dash.show(); else dash.hide();
     $('search-box').hidden = sql || !Q();
     if (sql) $('search-results').hidden = true;
     $('sql-preview').hidden = sql || !sqlShown;
@@ -492,7 +497,11 @@
 
   // ---------- query tabs ----------
   function renderTabs() {
-    const tabs = queries.map((q) => h('div', {
+    const tabs = [h('div', {
+      class: 'qtab dash-tab' + (activeId === 'dash' ? ' active' : ''), role: 'tab', title: 'Charts and figures from this database',
+      onclick: () => activate('dash'),
+    }, icon('dash'), h('span', { class: 'qtab-name' }, 'Dashboards'))];
+    tabs.push(...queries.map((q) => h('div', {
       class: 'qtab' + (q.id === activeId ? ' active' : ''), role: 'tab',
       title: `${q.name}\nDouble-click to rename`,
       onclick: (e) => { if (!e.target.closest('.x')) activate(q.id); },
@@ -501,7 +510,7 @@
         if (name && name.trim()) { q.name = uniqueQueryName(name.trim()); save(); renderTabs(); }
       },
     }, h('span', { class: 'qtab-name' }, q.name),
-    h('button', { class: 'x', title: 'Close', onclick: () => closeQuery(q.id) }, icon('close'))));
+    h('button', { class: 'x', title: 'Close', onclick: () => closeQuery(q.id) }, icon('close')))));
     tabs.push(h('div', {
       class: 'qtab sql' + (activeId === 'sql' ? ' active' : ''), role: 'tab', onclick: () => setSqlMode(),
     }, h('span', { class: 'qtab-name' }, 'Write SQL')));
@@ -538,9 +547,7 @@
       return li;
     }));
     $('btn-undo').disabled = !q.undo.length;
-    const filters = q.steps.filter((s) => s.type === 'filter').length;
-    $('steps-foot').hidden = !filters;
-    $('btn-clear-filters').textContent = filters > 1 ? `Remove all ${filters} filters` : 'Remove the filter';
+    $('steps-foot').hidden = q.steps.length < 2;
   }
 
   function stepMenu(anchor, i, li) {
@@ -742,7 +749,7 @@
   async function refresh() {
     clearTimeout(refreshTimer);
     clearTimeout(editTimer);
-    if (!db || activeId === 'sql') return;
+    if (!db || activeId === 'sql' || activeId === 'dash') return;
     const q = Q();
     const seq = ++refreshSeq;
     const stale = () => seq !== refreshSeq || Q() !== q;
@@ -1998,6 +2005,21 @@
     for (const id of Object.keys(edge)) $(id).classList.toggle('collapsed', saved[id] ?? id === 'facets-panel');
   }
 
+  // ---------- dashboards ----------
+  function addToDashboard() {
+    const q = Q();
+    if (!q) return;
+    const vi = viewIndex(q);
+    const c = compileView(q);
+    if (c.error && c.error.step <= vi) return toast('Fix the step with a problem first.', true);
+    const id = dash.addFromQuery(q.name, clone(q.steps.slice(0, vi + 1)));
+    activeId = 'dash';
+    save();
+    renderAll();
+    dash.show(id);
+    toast('Added to the dashboard. Choose how to show it on the right.');
+  }
+
   // ---------- wiring ----------
   function needQuery(fn) {
     return (e) => { if (Q()) fn(e); };
@@ -2018,6 +2040,17 @@
     $('btn-export-all').addEventListener('click', exportAll);
     $('btn-export').addEventListener('click', exportCurrent);
     $('btn-export-more').addEventListener('click', (e) => exportMenu(e.currentTarget));
+    dash = window.DBXDashboard.create({
+      api, query, CancelledError, toast, inlineParams,
+      db: () => db,
+      schema: () => schema,
+      queries: () => queries,
+      compile: (steps) => P.compile(steps, schema, steps.length - 1, { self: null, resolveQuery: (id) => queries.find((x) => x.id === id) }),
+      openQuery: (steps, name) => openQuery(steps, name),
+      startExport: (sheets, filename) => startExport(sheets, filename),
+      isPk: (col) => !!(col.prov && P.primaryKey(col.prov.table, schema) === col.prov.column),
+    });
+    $('btn-to-dash').addEventListener('click', needQuery(addToDashboard));
     initPanels();
     initPlatform();
     setBasket([]);
@@ -2060,7 +2093,7 @@
 
     $('btn-add-facet').addEventListener('click', needQuery((e) => addFacetMenu(e.currentTarget)));
     $('btn-undo').addEventListener('click', undo);
-    $('btn-clear-filters').addEventListener('click', removeFilters);
+    $('btn-clear-steps').addEventListener('click', removeAllSteps);
     $('btn-duplicate').addEventListener('click', needQuery(() => { const q = Q(); openQuery(clone(q.steps), q.name); }));
     $('btn-show-sql').addEventListener('click', () => {
       sqlShown = !sqlShown;

@@ -11,7 +11,8 @@ disk row by row. Standard library only - nothing to install.
 
 (On Windows, type python instead of python3.)
 
-The database is opened read-only and never modified.
+The database is opened read-only and never modified. Dashboards are the one
+thing written to disk: a small <database>.dashboards.json beside it.
 """
 
 import argparse
@@ -40,6 +41,7 @@ SQLITE_HEADER = b"SQLite format 3\x00"
 STATIC_ROOTS = ("index.html", "css/", "js/")
 MAX_PAGE_ROWS = 1000
 MAX_SAFE_JS_INT = 2**53 - 1
+MAX_DASHBOARD_BYTES = 2_000_000
 EXPORT_DIR = tempfile.mkdtemp(prefix="dbexplorer-")
 atexit.register(shutil.rmtree, EXPORT_DIR, ignore_errors=True)
 
@@ -129,12 +131,23 @@ def load_schema(conn):
             continue  # e.g. a virtual table whose module isn't available
         if not cols:
             continue
+        # Columns that lead an index: grouping or filtering on these is fast
+        # even on a huge table, so dashboards prefer them.
+        indexed = [c for c, _, pk in cols if pk == 1]
+        try:
+            for (iname,) in conn.execute("SELECT name FROM pragma_index_list(?)", (name,)).fetchall():
+                first = conn.execute("SELECT name FROM pragma_index_info(?) WHERE seqno = 0", (iname,)).fetchone()
+                if first and first[0] and first[0] not in indexed:
+                    indexed.append(first[0])
+        except sqlite3.Error:
+            pass
         tables.append({
             "name": name,
             "type": kind,
             "columns": [{"name": c, "type": t or "", "pk": pk} for c, t, pk in cols],
             "fks": [{"id": i, "table": t, "from": f, "to": to} for i, t, f, to in fks],
             "estimate": estimates.get(name),
+            "indexed": indexed,
         })
     return tables
 
@@ -231,6 +244,48 @@ def run_query(db_id, key, sql, params, limit):
             "more": len(rows) > limit,
             "ms": round((time.monotonic() - started) * 1000),
         }
+
+
+# ---------------------------------------------------------------- dashboards
+
+def dashboards_file(db_id):
+    """Dashboards live in a small JSON file next to the database, so they
+    travel with it. Only ever this one derived name: never a path from the page."""
+    path = DATABASES.get(db_id)
+    if path is None:
+        raise ValueError("That database is no longer open - please open it again")
+    return path + ".dashboards.json"
+
+
+def load_dashboards(db_id):
+    f = dashboards_file(db_id)
+    try:
+        with open(f, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError:
+        data = None
+    except (OSError, ValueError) as e:
+        raise ValueError(f"Couldn't read {os.path.basename(f)}: {e}")
+    return {"data": data, "file": f}
+
+
+def save_dashboards(db_id, data):
+    f = dashboards_file(db_id)
+    text = json.dumps(data, ensure_ascii=False, indent=1)
+    if len(text.encode("utf-8")) > MAX_DASHBOARD_BYTES:
+        raise ValueError("Those dashboards are too big to save")
+    tmp = f + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp, f)  # all or nothing: a crash never leaves half a file
+    except OSError as e:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise ValueError(f"Couldn't save next to the database ({e.strerror or e})")
+    return {"ok": True, "file": f}
 
 
 # ---------------------------------------------------------------- exports
@@ -408,6 +463,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     if slot:
                         slot.conn.interrupt()
                 return self.send_json(200, {"ok": True})
+            if route == "api/dashboards":
+                return self.send_json(200, load_dashboards(body.get("id")))
+            if route == "api/dashboards/save":
+                if not isinstance(body.get("data"), dict):
+                    raise ValueError("Nothing to save")
+                return self.send_json(200, save_dashboards(body.get("id"), body["data"]))
             if route == "api/export":
                 return self.start_export(body)
             m = re.fullmatch(r"api/export/(\w+)/cancel", route)

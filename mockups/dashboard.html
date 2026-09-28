@@ -1,0 +1,1241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dashboard mockup</title>
+<link rel="stylesheet" href="../css/app.css">
+<style>
+/* ---------- dashboard mockup: layered on the real app.css ---------- */
+.mock-note { background: var(--surface-2); color: var(--muted); font-size: 11.5px; padding: 4px 14px; border-bottom: 1px solid var(--border); }
+.shell { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.qtab .icon-svg { width: 13px; height: 13px; }
+.qtab.dash { gap: 6px; padding-right: 10px; }
+
+.dash-toolbar { gap: 8px 14px; }
+.dash-toolbar select.dash-pick { font-weight: 700; font-size: 12.5px; max-width: 220px; }
+.dash-toolbar .rename { width: 200px; font-weight: 700; }
+.controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ctl {
+  display: inline-flex; align-items: center; gap: 0; border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--surface); font-size: 12px; height: 26px;
+}
+.ctl.set { border-color: var(--green); box-shadow: inset 0 -2px 0 var(--green); }
+.ctl-name { padding: 0 7px; font-weight: 700; color: var(--muted); font-size: 11px; border-right: 1px solid var(--rule); height: 100%; display: flex; align-items: center; background: var(--surface-2); }
+.ctl select, .ctl input { border: 0; background: transparent; height: 24px; font-size: 12px; font-weight: 700; }
+.ctl input[type=date] { width: 118px; font-weight: 400; }
+.ctl .x { margin: 0 2px; }
+.tool.on, .tool.on:hover:not(:disabled) { background: var(--green-dark); border-color: var(--green-dark); color: var(--on-green); }
+.saved { color: var(--muted); font-size: 11px; white-space: nowrap; }
+
+.dash-body { flex: 1; display: flex; min-height: 0; }
+.dash-scroll { flex: 1; overflow: auto; min-width: 0; }
+.dash-grid {
+  display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); grid-auto-rows: 52px; grid-auto-flow: row dense;
+  gap: 10px; padding: 12px 14px 40px;
+}
+.panel {
+  background: var(--surface); box-shadow: var(--panel-shadow); display: flex; flex-direction: column;
+  min-width: 0; min-height: 0; position: relative;
+}
+.panel.editing { box-shadow: 0 0 0 2px var(--green); }
+.panel.dragging { opacity: .55; }
+.panel-head { display: flex; align-items: center; gap: 6px; padding: 7px 6px 4px 9px; min-height: 30px; }
+.panel-tag {
+  background: var(--green-dark); color: var(--on-green); font: 700 10px/1.2 var(--font); letter-spacing: .02em;
+  padding: 3px 6px; border-radius: var(--radius); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70%;
+}
+.panel-note { color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.panel-actions { display: flex; margin-left: auto; opacity: 0; transition: opacity .1s; }
+.panel:hover .panel-actions, .panel.editing .panel-actions, .panel-actions:focus-within { opacity: 1; }
+.panel-filters { padding: 0 9px 2px; font-size: 10.5px; color: var(--green); font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.panel-body { flex: 1; min-height: 0; overflow: hidden; position: relative; padding: 2px 10px 8px; }
+.panel-body.scroll { overflow: auto; }
+.grip { display: none !important; cursor: grab; }
+.resize { display: none; position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; cursor: nwse-resize;
+  background: linear-gradient(135deg, transparent 50%, var(--green) 50%, var(--green) 60%, transparent 60%, transparent 70%, var(--green) 70%, var(--green) 80%, transparent 80%); }
+.layout .grip { display: inline-grid !important; }
+.layout .resize { display: block; }
+.layout .panel { outline: 1px dashed var(--green); outline-offset: -1px; }
+.size-badge { position: absolute; right: 20px; bottom: 4px; background: var(--green-dark); color: #fff; font-size: 10.5px; padding: 1px 5px; border-radius: var(--radius); }
+.add-tile {
+  grid-column: span 3; grid-row: span 2; border: 1px dashed var(--border); background: transparent; color: var(--muted);
+  display: flex; align-items: center; justify-content: center; gap: 6px; font-weight: 700; order: 9999;
+}
+.add-tile:hover:not(:disabled) { border-color: var(--green); }
+.empty-dash { grid-column: 1 / -1; background: var(--surface); box-shadow: var(--panel-shadow); padding: 30px; text-align: center; }
+.empty-dash p { margin: 0 0 12px; }
+
+/* number tile */
+.num { display: flex; flex-direction: column; justify-content: center; height: 100%; gap: 1px; }
+.num-value { font-size: 26px; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.num-cap { color: var(--muted); font-size: 11px; }
+.delta { font-size: 11.5px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.delta.up { color: var(--green); }
+.delta.down { color: var(--danger); }
+.delta span { color: var(--muted); font-weight: 400; }
+.num-row { display: flex; align-items: flex-end; gap: 10px; }
+.num-row svg { flex: 1; min-width: 0; }
+
+/* horizontal bars */
+.hb { display: flex; flex-direction: column; gap: 5px; padding-top: 2px; }
+.hb-row { display: grid; grid-template-columns: minmax(60px, 32%) 1fr auto; gap: 8px; align-items: center; font-size: 11.5px; cursor: pointer; }
+.hb-row:hover .hb-label { color: var(--text); text-decoration: underline; }
+.hb-row.on .hb-label { color: var(--green); font-weight: 700; }
+.hb-label { text-align: right; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hb-track { background: var(--surface-2); height: 14px; }
+.hb-fill { height: 100%; }
+.hb-val { font-weight: 700; font-variant-numeric: tabular-nums; min-width: 52px; text-align: right; }
+.hb-val span { color: var(--muted); font-weight: 400; margin-left: 5px; display: inline-block; min-width: 28px; }
+.more-note { color: var(--muted); font-size: 11px; margin-top: 3px; }
+
+/* svg charts */
+.chart { display: block; overflow: visible; }
+.chart .gl { stroke: var(--rule); stroke-width: 1; }
+.chart .axis { stroke: var(--border); }
+.chart text { fill: var(--muted); font: 10.5px var(--font); }
+.chart .val { fill: var(--text-2); font-weight: 700; }
+.chart .guide { stroke: var(--muted); stroke-dasharray: 2 2; }
+.chart .col:hover, .chart .col.on { opacity: .8; }
+.legend { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 11px; color: var(--text-2); margin-bottom: 4px; }
+.legend i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: -1px; }
+
+/* table */
+.dtable { border-collapse: collapse; width: 100%; font-size: 12px; }
+.dtable th { text-align: left; font-weight: 700; font-size: 11px; color: var(--muted); padding: 3px 7px; border-bottom: 1px solid var(--green); position: sticky; top: 0; background: var(--surface); }
+.dtable td { padding: 3px 7px; border-bottom: 1px solid var(--rule); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.dtable td.n, .dtable th.n { text-align: right; font-variant-numeric: tabular-nums; }
+.dtable tbody tr { cursor: pointer; }
+.dtable tbody tr:hover td:first-child { text-decoration: underline; }
+.dtable .rank { color: var(--muted); width: 1%; }
+
+/* mix */
+.mix-bar { display: flex; height: 18px; margin: 4px 0 8px; }
+.mix-bar div { height: 100%; cursor: pointer; }
+.mix-bar div:hover { opacity: .8; }
+.mix-legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 3px 14px; font-size: 11.5px; }
+.mix-item { display: flex; align-items: center; gap: 6px; cursor: pointer; min-width: 0; }
+.mix-item i { width: 3px; align-self: stretch; }
+.mix-item .l { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mix-item b { font-variant-numeric: tabular-nums; }
+.mix-item span.p { color: var(--muted); min-width: 30px; text-align: right; }
+
+/* calendar */
+.cal-nav { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; font-weight: 700; font-size: 12px; }
+.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.cal .dow { font-size: 10px; color: var(--muted); font-weight: 700; }
+.cal .day { border: 1px solid var(--rule); min-height: 0; padding: 2px 4px; font-size: 10.5px; display: flex; flex-direction: column; justify-content: space-between; }
+.cal .day.out { background: var(--surface-2); border-color: transparent; }
+.cal .day b { font-size: 10px; color: var(--muted); font-weight: 700; }
+.cal .day span { font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* tooltip */
+.tip { position: fixed; z-index: 60; pointer-events: none; background: var(--green-dark); color: #fff; font-size: 11.5px; padding: 5px 8px; border-radius: var(--radius); box-shadow: var(--float-shadow); white-space: nowrap; }
+.tip b { font-variant-numeric: tabular-nums; }
+
+/* editor drawer */
+.drawer { width: 360px; flex-shrink: 0; background: var(--surface); border-left: 1px solid var(--border); display: flex; flex-direction: column; min-height: 0; }
+.drawer-head { display: flex; align-items: center; gap: 6px; padding: 10px 8px 8px 12px; border-bottom: 1px solid var(--rule); }
+.drawer-head h2 { margin-right: auto; }
+.drawer-body { flex: 1; overflow: auto; padding: 4px 12px 16px; }
+.drawer-foot { display: flex; gap: 6px; padding: 8px 12px; border-top: 1px solid var(--border); background: var(--surface-2); }
+.drawer-foot .spacer { flex: 1; }
+.sec { margin-top: 14px; }
+.sec > .tool-label { margin-bottom: 8px; }
+.field { display: grid; grid-template-columns: 96px 1fr; gap: 6px; align-items: center; margin-bottom: 7px; font-size: 12px; }
+.field > label { color: var(--muted); font-weight: 700; font-size: 11.5px; }
+.field select, .field input[type=text], .field input[type=number] { width: 100%; }
+.field .pair { display: flex; gap: 4px; min-width: 0; }
+.field .pair select { flex: 1; min-width: 0; }
+.checkline { display: flex; gap: 7px; align-items: center; font-size: 12px; margin: 0 0 6px 102px; cursor: pointer; }
+.steps-read { margin: 4px 0 0 102px; font-size: 11px; color: var(--muted); line-height: 1.5; }
+.steps-read b { color: var(--text-2); }
+.types { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }
+.type { display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 7px 2px 5px; font-size: 11px; }
+.type svg { width: 30px; height: 20px; }
+.type.on, .type.on:hover:not(:disabled) { background: var(--green-tint); border-color: var(--green); color: var(--text); }
+.swatches { display: flex; gap: 4px; flex-wrap: wrap; }
+.swatch { width: 20px; height: 20px; padding: 0; border: 2px solid transparent; }
+.swatch.on { outline: 2px solid var(--text); outline-offset: 1px; }
+.value-colours { margin: 2px 0 8px 102px; display: flex; flex-direction: column; gap: 3px; font-size: 11.5px; }
+.value-colours div { display: flex; align-items: center; gap: 6px; }
+.value-colours .swatch { width: 14px; height: 14px; }
+.sizes { display: flex; }
+.sug { display: flex; flex-direction: column; gap: 0; margin-top: 6px; border-top: 1px solid var(--rule); }
+.sug button { display: flex; align-items: center; gap: 10px; text-align: left; border: 0; border-bottom: 1px solid var(--rule); border-radius: 0; background: none; padding: 7px 4px; }
+.sug button:hover:not(:disabled) { background: var(--green-tint); }
+.sug svg { width: 30px; height: 20px; flex-shrink: 0; }
+.sug .t { display: flex; flex-direction: column; font-size: 12px; }
+.sug .t span { color: var(--muted); font-weight: 400; font-size: 11px; }
+.glyph { stroke: var(--green); fill: none; stroke-width: 1.6; }
+.glyph .f { fill: var(--green); stroke: none; }
+
+.toast2 { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 70; background: var(--green-dark); color: #fff; padding: 7px 14px; border-radius: var(--radius); box-shadow: var(--float-shadow); font-size: 12px; font-weight: 700; }
+.pop { position: fixed; z-index: 50; }
+.sqlpop { width: 420px; max-width: 90vw; }
+.sqlpop pre { font-family: var(--mono); font-size: 11.5px; white-space: pre-wrap; margin: 0; background: var(--surface-2); padding: 8px; border-left: 3px solid var(--green); }
+
+@media (max-width: 900px) {
+  .dash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .panel { grid-column: span 2 !important; }
+  .drawer { position: fixed; inset: auto 0 0 0; width: auto; height: 60vh; z-index: 40; box-shadow: var(--float-shadow); }
+}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand"><span class="brand-mark">DB</span><span class="brand-name">Explorer</span></div>
+  <div class="db-info">
+    <span class="db-name">C:\data\shop.sqlite · 48.2 MB</span>
+    <button class="ghost">Reload</button>
+    <button class="ghost">Open another</button>
+    <button class="secondary">Export all tables</button>
+  </div>
+</header>
+<div class="mock-note">Mockup with made-up data (a small shop: <b>orders</b> and <b>customers</b>). Everything is clickable; changes are kept in this browser. <button class="link small" id="reset">Reset the mockup</button></div>
+
+<div class="shell">
+  <div class="query-tabs" role="tablist">
+    <div class="qtab dash active" id="tab-dash"></div>
+    <div class="qtab mocktab"><span class="qtab-name">orders</span></div>
+    <div class="qtab mocktab"><span class="qtab-name">customers</span></div>
+    <div class="qtab mocktab"><span class="qtab-name">Shipped orders</span></div>
+    <div class="qtab sql mocktab">Write SQL</div>
+  </div>
+
+  <div class="toolbar dash-toolbar" role="toolbar">
+    <div class="tool-group">
+      <span class="tool-label">Dashboard</span>
+      <span id="dash-name"></span>
+    </div>
+    <div class="tool-group">
+      <span class="tool-label">Controls</span>
+      <div id="controls" class="controls"></div>
+      <button id="add-control" class="ghost small" title="Add a filter that applies to every panel with that column">+ Add control</button>
+    </div>
+    <span class="spacer"></span>
+    <span class="saved" id="saved">Saved next to the database</span>
+    <button id="btn-layout" class="tool" title="Drag panels to move them, drag the corner to resize">Edit layout</button>
+    <button id="btn-add" class="primary">Add panel</button>
+  </div>
+
+  <div class="dash-body">
+    <div class="dash-scroll"><div id="grid" class="dash-grid"></div></div>
+    <aside id="drawer" class="drawer" hidden></aside>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- tiny DOM helpers (the real app has these in js/dom.js) ----------
+  const $ = (id) => document.getElementById(id);
+  function h(tag, attrs, ...kids) {
+    const el = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v == null || v === false) continue;
+      if (k === 'class') el.className = v;
+      else if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else if (k in el && k !== 'list' && k !== 'style') el[k] = v;
+      else el.setAttribute(k, v === true ? '' : v);
+    }
+    for (const c of kids.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : String(c));
+    return el;
+  }
+  const NS = 'http://www.w3.org/2000/svg';
+  function s(tag, attrs, ...kids) {
+    const el = document.createElementNS(NS, tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v == null || v === false) continue;
+      if (k.startsWith('on')) el.addEventListener(k.slice(2), v);
+      else el.setAttribute(k, v);
+    }
+    for (const c of kids.flat()) if (c != null && c !== false) el.append(c instanceof Node ? c : document.createTextNode(String(c)));
+    return el;
+  }
+  const ICONS = {
+    edit: 'M4 20h4L19 9l-4-4L4 16z', more: 'M5 12h.01M12 12h.01M19 12h.01', close: 'M6 6l12 12M18 6L6 18',
+    plus: 'M12 5v14M5 12h14', left: 'M15 18l-6-6 6-6', right: 'M9 18l6-6-6-6',
+    grip: 'M9 6h.01M15 6h.01M9 12h.01M15 12h.01M9 18h.01M15 18h.01',
+    dash: 'M4 4h7v9H4zM13 4h7v5h-7zM13 11h7v9h-7zM4 15h7v5H4z',
+  };
+  const icon = (n) => s('svg', { class: 'icon-svg' + (n === 'more' || n === 'grip' ? ' dots' : ''), viewBox: '0 0 24 24' }, s('path', { d: ICONS[n] }));
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+
+  let toastTimer;
+  function toast(msg) {
+    document.querySelectorAll('.toast2').forEach((t) => t.remove());
+    const t = h('div', { class: 'toast2' }, msg);
+    document.body.append(t);
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.remove(), 2600);
+  }
+
+  // Floating menu, positioned under its button; closes on any outside click.
+  function closePop() { document.querySelectorAll('.pop').forEach((p) => p.remove()); }
+  function pop(anchor, content) {
+    closePop();
+    const r = anchor.getBoundingClientRect();
+    const el = h('div', { class: 'pop' }, content);
+    document.body.append(el);
+    const w = el.offsetWidth;
+    el.style.left = clamp(r.left, 8, innerWidth - w - 8) + 'px';
+    el.style.top = Math.min(r.bottom + 4, innerHeight - el.offsetHeight - 8) + 'px';
+    setTimeout(() => document.addEventListener('pointerdown', function off(e) {
+      if (!el.contains(e.target)) { el.remove(); document.removeEventListener('pointerdown', off); }
+    }), 0);
+    return el;
+  }
+  function menu(anchor, items, title) {
+    const list = h('div', { class: 'menu' }, title ? h('div', { class: 'menu-title' }, title) : null,
+      items.map((it) => it === '-' ? h('div', { class: 'menu-sep' }) : h('button', {
+        class: 'menu-item', disabled: it.disabled, onclick: () => { closePop(); it.onclick(); },
+      }, h('span', { class: 'menu-label' }, it.label, it.hint ? h('span', { class: 'menu-hint' }, it.hint) : null),
+      it.badge ? h('span', { class: 'menu-badge' }, it.badge) : null)));
+    pop(anchor, list);
+  }
+
+  // ---------- made-up data: a small shop ----------
+  function rng(seed) { return () => ((seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296); }
+  const R = rng(7);
+  const pick = (pairs) => { let x = R() * pairs.reduce((n, p) => n + p[1], 0); for (const p of pairs) { x -= p[1]; if (x <= 0) return p[0]; } return pairs[0][0]; };
+  const REGIONS = [['North', 22], ['South', 26], ['East', 14], ['West', 18], ['Scotland', 12], ['Wales', 8]];
+  const PRODUCTS = [
+    ['Headphones', 'Electronics', 79], ['Smart speaker', 'Electronics', 129], ['Tablet', 'Electronics', 329], ['Charger', 'Electronics', 19],
+    ['Desk lamp', 'Home', 39], ['Throw', 'Home', 29], ['Kettle', 'Home', 45], ['Mug set', 'Home', 18],
+    ['Hose', 'Garden', 25], ['Planter', 'Garden', 32], ['Bird feeder', 'Garden', 22], ['Barbecue', 'Garden', 189],
+    ['Puzzle', 'Toys', 15], ['Building set', 'Toys', 49], ['Board game', 'Toys', 35],
+    ['Novel', 'Books', 9], ['Cookbook', 'Books', 22], ['Atlas', 'Books', 30],
+  ];
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const addDays = (str, n) => { const d = new Date(str + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return iso(d); };
+  const daysBetween = (a, b) => Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 864e5);
+
+  const orders = [];
+  const START = '2023-01-01';
+  const MAX_DATE = '2024-12-31';
+  for (let i = 0, day = START; day <= MAX_DATE; i++, day = addDays(day, 1)) {
+    const d = new Date(day + 'T00:00:00Z');
+    const m = d.getUTCMonth();
+    const wknd = d.getUTCDay() === 0 || d.getUTCDay() === 6;
+    const n = Math.round(4 * (1 + i / 731 * 0.5) * (m >= 10 ? 1.7 : 1) * (wknd ? 1.3 : 1) * (0.5 + R()));
+    for (let k = 0; k < n; k++) {
+      const pr = pick(PRODUCTS.map((p) => [p, (1 / Math.sqrt(p[2])) * (p[1] === 'Garden' && m >= 3 && m <= 7 ? 2.6 : 1) * (p[1] === 'Toys' && m >= 10 ? 2.6 : 1)]));
+      const qty = pick([[1, 60], [2, 25], [3, 10], [4, 5]]);
+      orders.push({
+        order_id: orders.length + 1, order_date: day, region: pick(REGIONS), category: pr[1], product: pr[0],
+        status: daysBetween(day, MAX_DATE) < 12 && R() < .5 ? 'pending' : pick([['shipped', 84], ['returned', 9], ['cancelled', 7]]),
+        quantity: qty, amount: Math.round(pr[2] * qty * (0.9 + R() * 0.2) * 100) / 100,
+        customer_id: Math.floor(600 * Math.pow(R(), 1.6)) + 1,
+      });
+    }
+  }
+  const customers = [];
+  for (let i = 1; i <= 600; i++) {
+    customers.push({
+      customer_id: i, segment: pick([['Consumer', 70], ['Business', 22], ['Education', 8]]), region: pick(REGIONS),
+      joined: addDays('2019-01-01', Math.floor(R() * 2190)), marketing_opt_in: R() < .46 ? 'yes' : 'no',
+    });
+  }
+
+  // What the real app gets from the schema: tables, columns and their types.
+  const TABLES = {
+    orders: { rows: orders, cols: [['order_id', 'int'], ['order_date', 'date'], ['region', 'text'], ['category', 'text'], ['product', 'text'], ['status', 'text'], ['quantity', 'int'], ['amount', 'real'], ['customer_id', 'int']] },
+    customers: { rows: customers, cols: [['customer_id', 'int'], ['segment', 'text'], ['region', 'text'], ['joined', 'date'], ['marketing_opt_in', 'text']] },
+  };
+  // Open query tabs can be panel sources too (a query is just steps).
+  const QUERIES = {
+    'Shipped orders': { table: 'orders', test: (r) => r.status === 'shipped', steps: 'Filtered: status = shipped' },
+  };
+  const source = (key) => key.startsWith('q:')
+    ? { ...QUERIES[key.slice(2)], name: key.slice(2) }
+    : { table: key.slice(2), name: key.slice(2) };
+  const colsOf = (key) => TABLES[source(key).table].cols;
+  const typeOf = (key, col) => (colsOf(key).find((c) => c[0] === col) || [])[1];
+  const isId = (c) => /(^|_)id$/.test(c);
+
+  // ---------- dashboards (in the real app: a small file next to the database) ----------
+  const PALETTE = ['#3d9970', '#2d6fb8', '#c1502a', '#b0700f', '#6b5bb5', '#d4537e', '#4f8a9e', '#8c8b84'];
+  const STORE = 'dbx.mock.dashboards.v1';
+  let uid = 0;
+  const newId = () => 'p' + Date.now().toString(36) + (uid++);
+
+  const panel = (o) => ({
+    id: newId(), title: 'New panel', note: '', type: 'bars', source: 't:orders', by: null, bucket: 'month',
+    measures: [{ fn: 'count' }], sort: 'value', top: 10, other: false, color: PALETTE[0], colorBy: false,
+    format: 'number', decimals: null, showPct: true, compare: true, spark: true, heat: true, fill: true, follow: true,
+    w: 4, h: 4, ...o,
+  });
+
+  function sampleDashboard() {
+    return {
+      id: 'd1', name: 'Shop overview',
+      controls: [
+        { id: 'c1', col: 'order_date', kind: 'dates', preset: 'all' },
+        { id: 'c2', col: 'region', kind: 'choice', value: null },
+      ],
+      colors: { category: { Electronics: '#2d6fb8', Home: '#3d9970', Garden: '#b0700f', Toys: '#d4537e', Books: '#6b5bb5' } },
+      panels: [
+        panel({ title: 'Orders', type: 'number', w: 3, h: 2 }),
+        panel({ title: 'Revenue', type: 'number', measures: [{ fn: 'sum', col: 'amount' }], format: 'money', w: 3, h: 2 }),
+        panel({ title: 'Average order', type: 'number', measures: [{ fn: 'avg', col: 'amount' }], format: 'money', decimals: 2, spark: false, w: 3, h: 2 }),
+        panel({ title: 'Customers', type: 'number', measures: [{ fn: 'distinct', col: 'customer_id' }], w: 3, h: 2 }),
+        panel({ title: 'Revenue by month', type: 'line', by: 'order_date', bucket: 'month', measures: [{ fn: 'sum', col: 'amount' }], format: 'money', w: 8, h: 5 }),
+        panel({ title: 'Revenue by region', type: 'bars', by: 'region', measures: [{ fn: 'sum', col: 'amount' }], format: 'money', w: 4, h: 5 }),
+        panel({ title: 'Top products', note: 'click a row to filter', type: 'table', by: 'product', measures: [{ fn: 'sum', col: 'amount' }, { fn: 'count' }, { fn: 'avg', col: 'quantity' }], format: 'money', w: 6, h: 6 }),
+        panel({ title: 'Orders by category', type: 'mix', by: 'category', w: 6, h: 3 }),
+        panel({ title: 'Busiest days', type: 'columns', by: 'order_date', bucket: 'weekday', sort: 'label', w: 6, h: 3, color: PALETTE[1] }),
+        panel({ title: 'Orders per day', type: 'calendar', by: 'order_date', bucket: 'day', w: 7, h: 6, month: '2024-12' }),
+        panel({ title: 'Customers by segment', type: 'bars', source: 't:customers', by: 'segment', colorBy: false, color: PALETTE[4], w: 5, h: 3 }),
+        panel({ title: 'Order status', type: 'bars', source: 't:orders', by: 'status', color: PALETTE[2], w: 5, h: 3 }),
+      ],
+    };
+  }
+
+  let state;
+  function load() {
+    try { state = JSON.parse(localStorage.getItem(STORE) || 'null'); } catch (_) { state = null; }
+    if (!state || !Array.isArray(state.dashboards) || !state.dashboards.length) state = { active: 'd1', dashboards: [sampleDashboard()] };
+  }
+  let saveTimer;
+  function save() {
+    try { localStorage.setItem(STORE, JSON.stringify(state)); } catch (_) { /* not kept */ }
+    $('saved').textContent = 'Saving…';
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => { $('saved').textContent = 'Saved to shop.sqlite.dashboards.json'; }, 500);
+  }
+  const D = () => state.dashboards.find((d) => d.id === state.active) || state.dashboards[0];
+  const P = (id) => D().panels.find((p) => p.id === id);
+
+  // ---------- the query engine, in miniature ----------
+  // The real version turns a panel into applied steps and SQL; here it runs on
+  // the made-up rows so every setting can be tried.
+  const FN = { count: 'Number of rows', sum: 'Total', avg: 'Average', min: 'Smallest', max: 'Largest', distinct: 'Different' };
+  const mLabel = (m) => (m.fn === 'count' ? 'Number of rows' : `${FN[m.fn]} ${m.col}`);
+  function agg(rows, m) {
+    if (m.fn === 'count') return rows.length;
+    const v = rows.map((r) => r[m.col]).filter((x) => x != null);
+    if (m.fn === 'distinct') return new Set(v).size;
+    if (!v.length) return null;
+    if (m.fn === 'sum') return v.reduce((a, b) => a + b, 0);
+    if (m.fn === 'avg') return v.reduce((a, b) => a + b, 0) / v.length;
+    if (m.fn === 'min') return v.reduce((a, b) => (b < a ? b : a));
+    return v.reduce((a, b) => (b > a ? b : a));
+  }
+
+  const PRESETS = [['all', 'All time'], ['last12', 'Last 12 months'], ['last90', 'Last 90 days'], ['y2024', '2024'], ['y2023', '2023'], ['custom', 'Choose dates…']];
+  function dateRange(c) {
+    switch (c.preset) {
+      case 'last12': return [addDays(MAX_DATE, -364), MAX_DATE];
+      case 'last90': return [addDays(MAX_DATE, -89), MAX_DATE];
+      case 'y2024': return ['2024-01-01', '2024-12-31'];
+      case 'y2023': return ['2023-01-01', '2023-12-31'];
+      case 'custom': return [c.from || null, c.to || null];
+      default: return [null, null];
+    }
+  }
+  const controlSet = (c) => (c.kind === 'choice' ? c.value != null : c.preset !== 'all');
+  // Controls reach every panel whose data has that column, unless the panel opts out.
+  const appliesTo = (c, p) => p.follow && !!typeOf(p.source, c.col);
+
+  function rowsFor(p, dateOverride) {
+    const src = source(p.source);
+    let rows = TABLES[src.table].rows;
+    if (src.test) rows = rows.filter(src.test);
+    for (const c of D().controls) {
+      if (!appliesTo(c, p)) continue;
+      // A chart of the control's own column keeps every value and highlights the pick instead.
+      if (c.kind === 'choice' && c.col === p.by && p.type !== 'number') continue;
+      if (c.kind === 'choice' && c.value != null) rows = rows.filter((r) => String(r[c.col]) === c.value);
+      if (c.kind === 'dates' && !(dateOverride && dateOverride.col === c.col)) {
+        const [f, t] = dateRange(c);
+        if (f || t) rows = rows.filter((r) => (!f || r[c.col] >= f) && (!t || r[c.col] <= t));
+      }
+    }
+    if (dateOverride) rows = rows.filter((r) => r[dateOverride.col] >= dateOverride.from && r[dateOverride.col] <= dateOverride.to);
+    return rows;
+  }
+
+  const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  const BUCKETS = [['day', 'Day'], ['week', 'Week'], ['month', 'Month'], ['quarter', 'Quarter'], ['year', 'Year'], ['weekday', 'Day of the week'], ['monthOfYear', 'Month of the year']];
+  function bucketKey(v, b) {
+    if (v == null) return null;
+    switch (b) {
+      case 'year': return v.slice(0, 4);
+      case 'quarter': return v.slice(0, 4) + '-Q' + (Math.floor((+v.slice(5, 7) - 1) / 3) + 1);
+      case 'month': return v.slice(0, 7);
+      case 'monthOfYear': return v.slice(5, 7);
+      case 'week': { const d = new Date(v + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return iso(d); }
+      case 'weekday': return String((new Date(v + 'T00:00:00Z').getUTCDay() + 6) % 7);
+      default: return v;
+    }
+  }
+  function bucketLabel(k, b) {
+    if (k == null) return '(empty)';
+    switch (b) {
+      case 'month': return MONTHS[+k.slice(5, 7) - 1] + ' ' + k.slice(2, 4);
+      case 'monthOfYear': return MONTHS[+k - 1];
+      case 'weekday': return WEEKDAYS[+k];
+      case 'week': return 'w/c ' + +k.slice(8) + ' ' + MONTHS[+k.slice(5, 7) - 1];
+      case 'day': return +k.slice(8) + ' ' + MONTHS[+k.slice(5, 7) - 1] + ' ' + k.slice(2, 4);
+      default: return k;
+    }
+  }
+  // The dates a bucket covers, so clicking a month can set the date control.
+  function bucketRange(k, b) {
+    if (b === 'day') return [k, k];
+    if (b === 'year') return [k + '-01-01', k + '-12-31'];
+    if (b === 'week') return [k, addDays(k, 6)];
+    if (b === 'month') { const n = new Date(Date.UTC(+k.slice(0, 4), +k.slice(5, 7), 0)).getUTCDate(); return [k + '-01', k + '-' + String(n).padStart(2, '0')]; }
+    if (b === 'quarter') { const q = +k.slice(6); const m1 = String(q * 3 - 2).padStart(2, '0'); const e = bucketRange(k.slice(0, 4) + '-' + String(q * 3).padStart(2, '0'), 'month')[1]; return [k.slice(0, 4) + '-' + m1 + '-01', e]; }
+    return null;
+  }
+
+  function groups(p) {
+    const rows = rowsFor(p);
+    const isDate = typeOf(p.source, p.by) === 'date';
+    const b = isDate ? p.bucket : null;
+    const map = new Map();
+    for (const r of rows) {
+      const k = b ? bucketKey(r[p.by], b) : (r[p.by] == null ? null : String(r[p.by]));
+      if (!map.has(k)) map.set(k, []);
+      map.get(k).push(r);
+    }
+    let out = [...map].map(([key, rs]) => ({ key, label: b ? bucketLabel(key, b) : (key ?? '(empty)'), values: p.measures.map((m) => agg(rs, m)), rows: rs }));
+    const natural = (a, c) => (a.key ?? '').localeCompare(c.key ?? '', undefined, { numeric: true });
+    const byTime = isDate && (p.type === 'line' || p.type === 'calendar');
+    if (byTime || p.sort === 'label') out.sort(natural);
+    else if (p.sort === 'value-asc') out.sort((a, c) => (a.values[0] ?? 0) - (c.values[0] ?? 0));
+    else out.sort((a, c) => (c.values[0] ?? 0) - (a.values[0] ?? 0));
+    const total = p.measures.map((m) => agg(rows, m));
+    let hidden = 0;
+    if (!byTime && p.top && out.length > p.top) {
+      const rest = out.slice(p.top);
+      hidden = rest.length;
+      out = out.slice(0, p.top);
+      if (p.other) {
+        const rs = rest.flatMap((g) => g.rows);
+        out.push({ key: '\u0000other', label: `Other (${rest.length})`, values: p.measures.map((m) => agg(rs, m)), rows: rs, other: true });
+        hidden = 0;
+      }
+    }
+    return { groups: out, total, hidden, bucket: b };
+  }
+
+  // The panel as the steps it would be in Explore.
+  function stepsText(p) {
+    const src = source(p.source);
+    const parts = [`Source: ${src.table}`];
+    if (src.steps) parts.push(src.steps);
+    const ctl = D().controls.filter((c) => appliesTo(c, p) && controlSet(c) && !(c.kind === 'choice' && c.col === p.by));
+    if (ctl.length) parts.push('Dashboard controls: ' + ctl.map((c) => c.col).join(', '));
+    if (p.by) parts.push(`Grouped by ${p.by}${typeOf(p.source, p.by) === 'date' ? ` (${BUCKETS.find((x) => x[0] === p.bucket)[1].toLowerCase()})` : ''}: ${p.measures.map(mLabel).join(', ')}`);
+    else parts.push(`Summarised: ${p.measures.map(mLabel).join(', ')}`);
+    if (p.by && p.type !== 'line' && p.type !== 'calendar' && p.top) parts.push(`Kept top ${p.top}`);
+    return parts;
+  }
+  function sqlFor(p) {
+    const src = source(p.source);
+    const q = (n) => '"' + n + '"';
+    const m = p.measures.map((x) => (x.fn === 'count' ? 'COUNT(*)' : x.fn === 'distinct' ? `COUNT(DISTINCT ${q(x.col)})` : `${x.fn.toUpperCase()}(${q(x.col)})`) + ` AS ${q(mLabel(x))}`);
+    const where = [];
+    if (src.steps) where.push(`"status" = 'shipped'`);
+    for (const c of D().controls) {
+      if (!appliesTo(c, p) || !controlSet(c) || (c.kind === 'choice' && c.col === p.by)) continue;
+      if (c.kind === 'choice') where.push(`${q(c.col)} = '${c.value}'`);
+      else { const [f, t] = dateRange(c); if (f) where.push(`${q(c.col)} >= '${f}'`); if (t) where.push(`${q(c.col)} <= '${t}'`); }
+    }
+    const keyExpr = !p.by ? null : typeOf(p.source, p.by) !== 'date' ? q(p.by)
+      : ({ month: `strftime('%Y-%m', ${q(p.by)})`, year: `strftime('%Y', ${q(p.by)})`, weekday: `strftime('%w', ${q(p.by)})`, day: q(p.by), week: `date(${q(p.by)}, 'weekday 0', '-6 days')`, quarter: `strftime('%Y', ${q(p.by)}) || '-Q' || ((strftime('%m', ${q(p.by)}) + 2) / 3)`, monthOfYear: `strftime('%m', ${q(p.by)})` })[p.bucket];
+    return `SELECT ${keyExpr ? keyExpr + ` AS ${q(p.by)}, ` : ''}${m.join(', ')}\nFROM ${q(src.table)}` +
+      (where.length ? `\nWHERE ${where.join('\n  AND ')}` : '') +
+      (keyExpr ? `\nGROUP BY 1\nORDER BY ${p.type === 'line' || p.sort === 'label' ? '1' : '2 DESC'}` : '') +
+      (keyExpr && p.top && p.type !== 'line' && p.type !== 'calendar' ? `\nLIMIT ${p.top}` : '');
+  }
+
+  // ---------- formatting ----------
+  function fmtV(v, p, m, compact) {
+    if (v == null || Number.isNaN(v)) return '–';
+    // Money and % only apply to figures made from decimal columns (a price, not a quantity).
+    const plain = m && (m.fn === 'count' || m.fn === 'distinct' || typeOf(p.source, m.col) !== 'real');
+    const money = !plain && p.format === 'money';
+    const pct = !plain && p.format === 'percent';
+    if (compact && Math.abs(v) >= 10000) {
+      for (const [n, u] of [[1e9, 'B'], [1e6, 'M'], [1e3, 'k']]) {
+        if (Math.abs(v) >= n) return (money ? '£' : '') + (v / n).toFixed(Math.abs(v / n) >= 100 ? 0 : 1) + u;
+      }
+    }
+    const whole = m && (m.fn === 'count' || m.fn === 'distinct');
+    const d = whole ? 0 : p.decimals ?? (money ? 0 : Number.isInteger(v) ? 0 : 1);
+    const str = v.toLocaleString('en-GB', { minimumFractionDigits: d, maximumFractionDigits: d });
+    return money ? '£' + str : pct ? str + '%' : str;
+  }
+  const pctOf = (v, t) => (t ? Math.round(100 * v / t) + '%' : '');
+  function colourFor(p, g, i) {
+    if (g.other) return '#8c8b84';
+    const set = D().colors[p.by] || {};
+    return set[g.key] || PALETTE[i % PALETTE.length];
+  }
+
+  // ---------- tooltip ----------
+  const tip = h('div', { class: 'tip', hidden: true });
+  document.body.append(tip);
+  function showTip(e, ...lines) {
+    tip.replaceChildren(...lines.map((l, i) => h('div', null, i === 0 ? h('b', null, l) : l)));
+    tip.hidden = false;
+    tip.style.left = Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 8) + 'px';
+    tip.style.top = (e.clientY - tip.offsetHeight - 10) + 'px';
+  }
+  const hideTip = () => { tip.hidden = true; };
+
+  // ---------- clicking a chart sets a dashboard control ----------
+  function crossFilter(p, g) {
+    if (!p.by || g.other) return;
+    const d = D();
+    if (typeOf(p.source, p.by) === 'date') {
+      const r = bucketRange(g.key, p.bucket);
+      if (!r) return toast('Day-of-the-week groups can’t become a date range.');
+      let c = d.controls.find((x) => x.col === p.by && x.kind === 'dates');
+      if (!c) d.controls.push(c = { id: newId(), col: p.by, kind: 'dates', preset: 'all' });
+      c.preset = 'custom'; c.from = r[0]; c.to = r[1];
+      toast(`${p.by}: ${g.label}. Every panel with ${p.by} follows.`);
+    } else {
+      let c = d.controls.find((x) => x.col === p.by && x.kind === 'choice');
+      if (!c) d.controls.push(c = { id: newId(), col: p.by, kind: 'choice', value: null });
+      c.value = c.value === g.key ? null : g.key;
+      toast(c.value == null ? `${p.by} cleared` : `${p.by} = ${g.label}. Every panel with ${p.by} follows.`);
+    }
+    save();
+    renderControls();
+    renderPanels();
+  }
+  const activeValue = (p) => { const c = D().controls.find((x) => x.col === p.by && x.kind === 'choice'); return c && c.value; };
+
+  // ---------- panel renderers ----------
+  function niceTicks(max, n) {
+    if (!(max > 0)) return [0, 1];
+    const raw = max / n;
+    const mag = 10 ** Math.floor(Math.log10(raw));
+    const step = [1, 2, 2.5, 5, 10].map((x) => x * mag).find((x) => x >= raw);
+    const out = [];
+    for (let v = 0; v < max + step * 0.999; v += step) out.push(v);
+    return out;
+  }
+
+  function drawNumber(p, body) {
+    const m = p.measures[0];
+    const rows = rowsFor(p);
+    const v = agg(rows, m);
+    const dcol = colsOf(p.source).find((c) => c[1] === 'date');
+    let delta = null;
+    if (p.compare && dcol) {
+      const ctl = D().controls.find((c) => c.col === dcol[0] && c.kind === 'dates' && appliesTo(c, p));
+      let [f, t] = ctl ? dateRange(ctl) : [null, null];
+      let label = 'the period before';
+      if (!f || !t) { f = addDays(MAX_DATE, -364); t = MAX_DATE; label = 'last 12 months vs the 12 before'; }
+      const len = daysBetween(f, t) + 1;
+      const cur = agg(rowsFor(p, { col: dcol[0], from: f, to: t }), m);
+      const prev = agg(rowsFor(p, { col: dcol[0], from: addDays(f, -len), to: addDays(f, -1) }), m);
+      if (prev) delta = { pct: (cur - prev) / prev * 100, label, onlyLast: label === 'previous 12 months' && !(ctl && controlSet(ctl)) };
+    }
+    const w = body.clientWidth;
+    let spark = null;
+    if (p.spark && dcol && w > 180) {
+      const series = new Map();
+      for (const r of rows) { const k = bucketKey(r[dcol[0]], 'month'); if (!series.has(k)) series.set(k, []); series.get(k).push(r); }
+      const pts = [...series].sort((a, b) => a[0].localeCompare(b[0])).map(([, rs]) => agg(rs, m));
+      if (pts.length > 1) {
+        const sw = Math.min(w * 0.42, 150), sh = 30, max = Math.max(...pts), min = Math.min(...pts);
+        const x = (i) => i / (pts.length - 1) * sw, y = (v2) => sh - 2 - (max === min ? .5 : (v2 - min) / (max - min)) * (sh - 4);
+        spark = s('svg', { class: 'chart', width: sw, height: sh },
+          s('path', { d: pts.map((v2, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v2).toFixed(1)}`).join(''), fill: 'none', stroke: p.color, 'stroke-width': 1.5 }),
+          s('circle', { cx: x(pts.length - 1), cy: y(pts[pts.length - 1]), r: 2.5, fill: p.color }));
+      }
+    }
+    body.replaceChildren(h('div', { class: 'num' },
+      h('div', { class: 'num-row' }, h('div', { class: 'num-value' }, fmtV(v, p, m, w < 200)), spark),
+      h('div', { class: 'num-cap' }, p.note || mLabel(m)),
+      delta ? h('div', { class: 'delta ' + (delta.pct >= 0 ? 'up' : 'down') },
+        (delta.pct >= 0 ? '+' : '') + delta.pct.toFixed(1) + '% ', h('span', null, delta.label.startsWith('last') ? delta.label : `vs ${delta.label}`)) : null));
+  }
+
+  function drawBars(p, body) {
+    const { groups: gs, total, hidden } = groups(p);
+    const fit = Math.max(1, Math.floor((body.clientHeight - 8) / 19));
+    const shown = gs.slice(0, fit);
+    const max = Math.max(...shown.map((g) => g.values[0] || 0), 1);
+    const on = activeValue(p);
+    const more = gs.length - shown.length + hidden;
+    body.replaceChildren(h('div', { class: 'hb' },
+      shown.map((g, i) => h('div', {
+        class: 'hb-row' + (on === g.key ? ' on' : ''), style: on != null && on !== g.key ? 'opacity:.4' : null, onclick: () => crossFilter(p, g),
+        onmousemove: (e) => showTip(e, g.label, `${mLabel(p.measures[0])}: ${fmtV(g.values[0], p, p.measures[0])}`, `${pctOf(g.values[0], total[0])} of the total`, 'Click to filter the dashboard'),
+        onmouseleave: hideTip,
+      },
+      h('div', { class: 'hb-label', title: g.label }, g.label),
+      h('div', { class: 'hb-track' }, h('div', { class: 'hb-fill', style: `width:${(100 * (g.values[0] || 0) / max).toFixed(1)}%;background:${p.colorBy ? colourFor(p, g, i) : g.other ? '#8c8b84' : p.color}` })),
+      h('div', { class: 'hb-val' }, fmtV(g.values[0], p, p.measures[0], true), p.showPct ? h('span', null, pctOf(g.values[0], total[0])) : null))),
+      more > 0 ? h('div', { class: 'more-note' }, `+ ${more} more. Make the panel taller, or show fewer.`) : null));
+  }
+
+  function axes(svgEl, W, H, m, ticks, y, p, meas) {
+    for (const t of ticks) {
+      svgEl.append(s('line', { class: 'gl', x1: m.l, x2: W - m.r, y1: y(t), y2: y(t) }),
+        s('text', { x: m.l - 6, y: y(t) + 3.5, 'text-anchor': 'end' }, fmtV(t, p, meas, true)));
+    }
+  }
+  function xLabels(svgEl, gs, x, H, m, iw) {
+    const every = Math.max(1, Math.ceil(gs.length / Math.max(1, Math.floor(iw / 54))));
+    gs.forEach((g, i) => { if (i % every === 0) svgEl.append(s('text', { x: x(i), y: H - m.b + 14, 'text-anchor': 'middle' }, g.label.length > 10 ? g.label.slice(0, 9) + '…' : g.label)); });
+  }
+
+  function drawLine(p, body) {
+    const { groups: gs } = groups(p);
+    const W = body.clientWidth - 20, H0 = body.clientHeight - 10;
+    const multi = p.measures.length > 1;
+    const legend = multi ? h('div', { class: 'legend' }, p.measures.map((mm, i) => h('span', null, h('i', { style: `background:${sc(i)}` }), mLabel(mm)))) : null;
+    function sc(i) { return i === 0 ? p.color : PALETTE[(PALETTE.indexOf(p.color) + i) % PALETTE.length]; }
+    const H = H0 - (multi ? 20 : 0);
+    if (!p.by) { body.replaceChildren(h('p', { class: 'muted small' }, 'Choose a column to plot along the bottom (Group by).')); return; }
+    const m = { l: 48, r: 10, t: 8, b: 20 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const max = Math.max(0, ...gs.flatMap((g) => g.values.filter((v) => v != null)));
+    const ticks = niceTicks(max, Math.max(2, Math.floor(ih / 40)));
+    const top = ticks[ticks.length - 1] || 1;
+    const x = (i) => m.l + (gs.length < 2 ? iw / 2 : i * iw / (gs.length - 1));
+    const y = (v) => m.t + ih - (v / top) * ih;
+    const svgEl = s('svg', { class: 'chart', width: W, height: H });
+    axes(svgEl, W, H, m, ticks, y, p, p.measures[0]);
+    xLabels(svgEl, gs, x, H, m, iw);
+    p.measures.forEach((mm, si) => {
+      const pts = gs.map((g, i) => [x(i), y(g.values[si] || 0)]);
+      const d = pts.map(([a, b], i) => `${i ? 'L' : 'M'}${a.toFixed(1)},${b.toFixed(1)}`).join('');
+      if (p.fill && si === 0 && pts.length) svgEl.append(s('path', { d: `${d}L${pts[pts.length - 1][0]},${m.t + ih}L${pts[0][0]},${m.t + ih}Z`, fill: sc(0), opacity: .1 }));
+      svgEl.append(s('path', { d, fill: 'none', stroke: sc(si), 'stroke-width': 2, 'stroke-linejoin': 'round' }));
+    });
+    const guide = s('line', { class: 'guide', y1: m.t, y2: m.t + ih, visibility: 'hidden' });
+    const dots = p.measures.map((_, si) => s('circle', { r: 3.5, fill: sc(si), visibility: 'hidden', stroke: 'var(--surface)' }));
+    svgEl.append(guide, ...dots);
+    const idx = (e) => { const r = svgEl.getBoundingClientRect(); return clamp(Math.round((e.clientX - r.left - m.l) / (iw / Math.max(1, gs.length - 1))), 0, gs.length - 1); };
+    svgEl.append(s('rect', {
+      x: m.l, y: m.t, width: Math.max(0, iw), height: Math.max(0, ih), fill: 'transparent', style: 'cursor:pointer',
+      onmousemove: (e) => {
+        const i = idx(e); const g = gs[i]; if (!g) return;
+        guide.setAttribute('x1', x(i)); guide.setAttribute('x2', x(i)); guide.setAttribute('visibility', 'visible');
+        dots.forEach((dt, si) => { dt.setAttribute('cx', x(i)); dt.setAttribute('cy', y(g.values[si] || 0)); dt.setAttribute('visibility', 'visible'); });
+        showTip(e, g.label, ...p.measures.map((mm, si) => `${mLabel(mm)}: ${fmtV(g.values[si], p, mm)}`), 'Click to filter to this ' + (p.bucket || 'value'));
+      },
+      onmouseleave: () => { hideTip(); guide.setAttribute('visibility', 'hidden'); dots.forEach((dt) => dt.setAttribute('visibility', 'hidden')); },
+      onclick: (e) => { const g = gs[idx(e)]; if (g) crossFilter(p, g); },
+    }));
+    body.replaceChildren(legend || '', svgEl);
+  }
+
+  function drawColumns(p, body) {
+    const { groups: gs, total } = groups(p);
+    const W = body.clientWidth - 20, H = body.clientHeight - 10;
+    if (!p.by) { body.replaceChildren(h('p', { class: 'muted small' }, 'Choose a column to group by.')); return; }
+    const m = { l: 44, r: 6, t: 14, b: 20 };
+    const iw = W - m.l - m.r, ih = H - m.t - m.b;
+    const max = Math.max(0, ...gs.map((g) => g.values[0] || 0));
+    const ticks = niceTicks(max, Math.max(2, Math.floor(ih / 40)));
+    const top = ticks[ticks.length - 1] || 1;
+    const bw = iw / Math.max(1, gs.length);
+    const x = (i) => m.l + bw * (i + 0.5);
+    const y = (v) => m.t + ih - (v / top) * ih;
+    const svgEl = s('svg', { class: 'chart', width: W, height: H });
+    axes(svgEl, W, H, m, ticks, y, p, p.measures[0]);
+    xLabels(svgEl, gs, x, H, m, iw);
+    const on = activeValue(p);
+    gs.forEach((g, i) => {
+      const v = g.values[0] || 0;
+      svgEl.append(s('rect', {
+        class: 'col' + (on === g.key ? ' on' : ''), x: x(i) - bw * 0.36, width: bw * 0.72, y: y(v), height: Math.max(0, m.t + ih - y(v)),
+        fill: p.colorBy ? colourFor(p, g, i) : p.color, style: 'cursor:pointer' + (on != null && on !== g.key ? ';opacity:.35' : ''),
+        onmousemove: (e) => showTip(e, g.label, `${mLabel(p.measures[0])}: ${fmtV(v, p, p.measures[0])}`, `${pctOf(v, total[0])} of the total`),
+        onmouseleave: hideTip, onclick: () => crossFilter(p, g),
+      }));
+      if (bw > 34) svgEl.append(s('text', { class: 'val', x: x(i), y: y(v) - 4, 'text-anchor': 'middle' }, fmtV(v, p, p.measures[0], true)));
+    });
+    body.replaceChildren(svgEl);
+  }
+
+  function drawTable(p, body) {
+    const { groups: gs, hidden } = groups(p);
+    const stats = p.measures.map((_, i) => {
+      const v = gs.filter((g) => !g.other).map((g) => g.values[i]).filter((x) => x != null).sort((a, b) => a - b);
+      return { min: v[0], max: v[v.length - 1], mid: v[Math.floor(v.length / 2)] };
+    });
+    // Data Golf-style shading: green above the middle value, red below.
+    const shade = (v, st) => {
+      if (!p.heat || v == null || st.max === st.min) return null;
+      const t = v >= st.mid ? (v - st.mid) / ((st.max - st.mid) || 1) : (st.mid - v) / ((st.mid - st.min) || 1);
+      const a = Math.round(8 + 32 * t);
+      return `background:color-mix(in srgb, ${v >= st.mid ? 'var(--green)' : 'var(--danger)'} ${a}%, transparent)`;
+    };
+    if (!p.by) { body.replaceChildren(h('p', { class: 'muted small' }, 'Choose a column to group by.')); return; }
+    body.classList.add('scroll');
+    body.replaceChildren(h('table', { class: 'dtable' },
+      h('thead', null, h('tr', null, h('th', null, ''), h('th', null, p.by), p.measures.map((mm) => h('th', { class: 'n' }, mLabel(mm))))),
+      h('tbody', null, gs.map((g, r) => h('tr', { style: activeValue(p) == null || activeValue(p) === g.key ? null : 'opacity:.4', onclick: () => crossFilter(p, g), title: 'Click to filter the dashboard' },
+        h('td', { class: 'rank' }, g.other ? '' : r + 1), h('td', null, g.label),
+        p.measures.map((mm, i) => h('td', { class: 'n', style: g.other ? null : shade(g.values[i], stats[i]) }, fmtV(g.values[i], p, mm))))))),
+    hidden ? h('div', { class: 'more-note' }, `+ ${hidden} more not shown (top ${p.top}).`) : null);
+  }
+
+  function drawMix(p, body) {
+    const { groups: gs, total } = groups(p);
+    if (!p.by) { body.replaceChildren(h('p', { class: 'muted small' }, 'Choose a column to split by.')); return; }
+    const t = total[0] || 1;
+    const on = activeValue(p);
+    const tipFor = (g) => (e) => showTip(e, g.label, `${fmtV(g.values[0], p, p.measures[0])} · ${pctOf(g.values[0], t)}`, 'Click to filter the dashboard');
+    body.replaceChildren(
+      h('div', { class: 'mix-bar' }, gs.map((g, i) => h('div', {
+        style: `width:${100 * (g.values[0] || 0) / t}%;background:${colourFor(p, g, i)};${on && on !== g.key ? 'opacity:.3' : ''}`,
+        onmousemove: tipFor(g), onmouseleave: hideTip, onclick: () => crossFilter(p, g),
+      }))),
+      h('div', { class: 'mix-legend' }, gs.map((g, i) => h('div', { class: 'mix-item', onclick: () => crossFilter(p, g), style: on && on !== g.key ? 'opacity:.45' : null },
+        h('i', { style: `background:${colourFor(p, g, i)}` }), h('span', { class: 'l' }, g.label),
+        h('b', null, fmtV(g.values[0], p, p.measures[0], true)), p.showPct ? h('span', { class: 'p' }, pctOf(g.values[0], t)) : null))));
+  }
+
+  function drawCalendar(p, body) {
+    const dcol = typeOf(p.source, p.by) === 'date' ? p.by : (colsOf(p.source).find((c) => c[1] === 'date') || [])[0];
+    if (!dcol) { body.replaceChildren(h('p', { class: 'muted small' }, 'This data has no date column.')); return; }
+    const month = p.month || MAX_DATE.slice(0, 7);
+    const [f, t] = bucketRange(month, 'month');
+    const rows = rowsFor(p).filter((r) => r[dcol] >= f && r[dcol] <= t);
+    const by = new Map();
+    for (const r of rows) { if (!by.has(r[dcol])) by.set(r[dcol], []); by.get(r[dcol]).push(r); }
+    const vals = new Map([...by].map(([k, rs]) => [k, agg(rs, p.measures[0])]));
+    const max = Math.max(1, ...vals.values());
+    const first = new Date(f + 'T00:00:00Z');
+    const lead = (first.getUTCDay() + 6) % 7;
+    const n = +t.slice(8);
+    const weeks = Math.ceil((lead + n) / 7);
+    const rowH = Math.max(18, Math.floor((body.clientHeight - 44 - weeks * 3) / weeks));
+    const go = (d) => { const dt = new Date(Date.UTC(+month.slice(0, 4), +month.slice(5, 7) - 1 + d, 1)); p.month = iso(dt).slice(0, 7); save(); drawCalendar(p, body); };
+    const cells = [];
+    for (let i = 0; i < weeks * 7; i++) {
+      const day = i - lead + 1;
+      if (day < 1 || day > n) { cells.push(h('div', { class: 'day out', style: `height:${rowH}px` })); continue; }
+      const key = month + '-' + String(day).padStart(2, '0');
+      const v = vals.get(key);
+      const a = v ? Math.round(12 + 70 * v / max) : 0;
+      cells.push(h('div', {
+        class: 'day', style: `height:${rowH}px;${v ? `background:color-mix(in srgb, ${p.color} ${a}%, var(--surface));color:${a > 55 ? '#fff' : 'inherit'}` : ''}`,
+        onmousemove: (e) => showTip(e, bucketLabel(key, 'day'), `${mLabel(p.measures[0])}: ${fmtV(v || 0, p, p.measures[0])}`),
+        onmouseleave: hideTip,
+      }, h('b', { style: a > 55 ? 'color:rgba(255,255,255,.85)' : null }, day), rowH > 30 && v ? h('span', null, fmtV(v, p, p.measures[0], true)) : ''));
+    }
+    body.replaceChildren(
+      h('div', { class: 'cal-nav' },
+        h('button', { class: 'icon', title: 'Previous month', onclick: () => go(-1) }, icon('left')),
+        h('span', null, MONTHS[+month.slice(5, 7) - 1] + ' ' + month.slice(0, 4)),
+        h('button', { class: 'icon', title: 'Next month', onclick: () => go(1) }, icon('right')),
+        h('span', { class: 'muted small', style: 'margin-left:auto;font-weight:400' }, `${fmtV(agg(rows, p.measures[0]), p, p.measures[0])} this month`)),
+      h('div', { class: 'cal' }, WEEKDAYS.map((d) => h('div', { class: 'dow' }, d)), cells));
+  }
+
+  const DRAW = { number: drawNumber, bars: drawBars, columns: drawColumns, line: drawLine, table: drawTable, mix: drawMix, calendar: drawCalendar };
+  const TYPES = [
+    ['number', 'Number'], ['bars', 'Bars'], ['columns', 'Columns'], ['line', 'Line'],
+    ['table', 'Table'], ['mix', 'Mix'], ['calendar', 'Calendar'],
+  ];
+  function glyph(type) {
+    const g = { class: 'glyph', viewBox: '0 0 30 20' };
+    switch (type) {
+      case 'number': return s('svg', g, s('text', { x: 3, y: 15, style: 'fill:var(--green);font:700 13px var(--font)' }, '123'));
+      case 'bars': return s('svg', g, s('rect', { class: 'f', x: 3, y: 3, width: 22, height: 3 }), s('rect', { class: 'f', x: 3, y: 9, width: 15, height: 3 }), s('rect', { class: 'f', x: 3, y: 15, width: 9, height: 3 }));
+      case 'columns': return s('svg', g, s('rect', { class: 'f', x: 4, y: 8, width: 4, height: 11 }), s('rect', { class: 'f', x: 11, y: 3, width: 4, height: 16 }), s('rect', { class: 'f', x: 18, y: 11, width: 4, height: 8 }));
+      case 'line': return s('svg', g, s('path', { d: 'M2 16L9 9L15 12L21 4L28 7' }));
+      case 'table': return s('svg', g, s('path', { d: 'M3 3h24v14H3zM3 8h24M3 12.5h24M11 3v14' }));
+      case 'mix': return s('svg', g, s('rect', { class: 'f', x: 2, y: 7, width: 12, height: 6 }), s('rect', { x: 14, y: 7, width: 8, height: 6, style: 'fill:#2d6fb8;stroke:none' }), s('rect', { x: 22, y: 7, width: 6, height: 6, style: 'fill:#b0700f;stroke:none' }));
+      default: return s('svg', g, s('path', { d: 'M3 3h24v14H3zM3 8h24M11 3v14M19 3v14M3 12.5h24' }), s('rect', { class: 'f', x: 11, y: 8, width: 8, height: 4.5 }));
+    }
+  }
+
+  // ---------- the grid of panels ----------
+  let layoutMode = false;
+  let editing = null; // panel id open in the drawer
+  const bodies = new Map(); // panel id -> body element
+  const ro = new ResizeObserver((entries) => {
+    for (const en of entries) {
+      const id = en.target.dataset.id;
+      const p = P(id);
+      if (p) requestAnimationFrame(() => DRAW[p.type](p, en.target));
+    }
+  });
+
+  function renderPanels() {
+    const grid = $('grid');
+    ro.disconnect();
+    bodies.clear();
+    const d = D();
+    if (!d.panels.length) {
+      grid.replaceChildren(h('div', { class: 'empty-dash' },
+        h('p', null, h('b', null, 'This dashboard is empty.')),
+        h('p', { class: 'muted' }, 'Start from suggestions based on this database’s tables and columns, or add panels one at a time.'),
+        h('div', { class: 'row', style: 'justify-content:center' },
+          h('button', { class: 'primary', onclick: starterPanels }, 'Suggest a starter dashboard'),
+          h('button', { onclick: () => openAdd() }, 'Add a panel'))));
+      return;
+    }
+    grid.replaceChildren(...d.panels.map((p, i) => panelEl(p, i)),
+      ...(layoutMode ? [h('button', { class: 'add-tile', onclick: () => openAdd() }, icon('plus'), 'Add panel')] : []));
+  }
+
+  function panelEl(p, i) {
+    const body = h('div', { class: 'panel-body', 'data-id': p.id });
+    const active = D().controls.filter((c) => appliesTo(c, p) && controlSet(c) && !(c.kind === 'choice' && c.col === p.by && p.type !== 'number'));
+    const el = h('section', {
+      class: 'panel' + (editing === p.id ? ' editing' : ''), 'data-id': p.id,
+      style: `grid-column:span ${p.w};grid-row:span ${p.h};order:${i}`,
+    },
+    h('div', { class: 'panel-head' },
+      h('button', { class: 'icon grip', title: 'Drag to move', onpointerdown: (e) => startMove(e, p, el) }, icon('grip')),
+      h('span', { class: 'panel-tag', title: p.title }, p.title),
+      p.note && p.type !== 'number' ? h('span', { class: 'panel-note' }, p.note) : null,
+      h('span', { class: 'panel-actions' },
+        h('button', { class: 'icon', title: 'Edit this panel', onclick: () => openEditor(p.id) }, icon('edit')),
+        h('button', { class: 'icon', title: 'More', onclick: (e) => panelMenu(e.currentTarget, p) }, icon('more')))),
+    active.length && p.type !== 'number' ? h('div', { class: 'panel-filters', title: 'Dashboard controls applied to this panel' },
+      active.map((c) => (c.kind === 'choice' ? `${c.col} = ${c.value}` : `${c.col}: ${PRESETS.find((x) => x[0] === c.preset)[1]}${c.preset === 'custom' ? ` ${c.from || '…'} to ${c.to || '…'}` : ''}`)).join(' · ')) : null,
+    body,
+    h('div', { class: 'resize', title: 'Drag to resize', onpointerdown: (e) => startResize(e, p, el) }));
+    bodies.set(p.id, body);
+    ro.observe(body);
+    return el;
+  }
+
+  function redraw(p) {
+    const el = document.querySelector(`.panel[data-id="${p.id}"]`);
+    if (!el) return renderPanels();
+    const i = D().panels.indexOf(p);
+    const fresh = panelEl(p, i);
+    el.replaceWith(fresh);
+  }
+
+  function panelMenu(anchor, p) {
+    menu(anchor, [
+      { label: 'Edit…', onclick: () => openEditor(p.id) },
+      { label: 'Duplicate', onclick: () => { const c = { ...JSON.parse(JSON.stringify(p)), id: newId(), title: p.title + ' (copy)' }; D().panels.splice(D().panels.indexOf(p) + 1, 0, c); save(); renderPanels(); } },
+      '-',
+      { label: 'Open in Explore', hint: 'a query tab with this panel’s steps', onclick: () => toast('Would open a tab: ' + stepsText(p).join(' → ')) },
+      { label: 'Show SQL', onclick: () => pop(anchor, h('div', { class: 'popover sqlpop' }, h('pre', null, sqlFor(p)))) },
+      { label: 'Download as Excel', hint: 'exactly what this panel shows', onclick: () => toast(`Would download “${p.title}.xlsx”`) },
+      '-',
+      { label: 'Remove from dashboard', onclick: () => removePanel(p) },
+    ], p.title);
+  }
+  function removePanel(p) {
+    const d = D();
+    const i = d.panels.indexOf(p);
+    d.panels.splice(i, 1);
+    if (editing === p.id) closeDrawer();
+    save(); renderPanels();
+    toast(`Removed “${p.title}”`);
+  }
+
+  // Drag the grip to move; panels swap order as you pass over them.
+  function startMove(e, p, el) {
+    e.preventDefault();
+    el.classList.add('dragging');
+    const move = (ev) => {
+      const over = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('.panel');
+      if (!over || over.dataset.id === p.id) return;
+      const list = D().panels;
+      const from = list.indexOf(p), to = list.findIndex((x) => x.id === over.dataset.id);
+      list.splice(from, 1);
+      list.splice(to, 0, p);
+      list.forEach((x, i) => { const n = document.querySelector(`.panel[data-id="${x.id}"]`); if (n) n.style.order = i; });
+    };
+    const up = () => { el.classList.remove('dragging'); removeEventListener('pointermove', move); removeEventListener('pointerup', up); save(); };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+  }
+
+  // Drag the corner to resize, snapping to the 12-column grid.
+  function startResize(e, p, el) {
+    e.preventDefault();
+    const grid = $('grid');
+    const cs = getComputedStyle(grid);
+    const gap = parseFloat(cs.columnGap);
+    const colW = (grid.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - gap * 11) / 12;
+    const rowH = parseFloat(cs.gridAutoRows);
+    const start = { x: e.clientX, y: e.clientY, w: p.w, h: p.h };
+    const badge = h('span', { class: 'size-badge' });
+    el.append(badge);
+    const move = (ev) => {
+      p.w = clamp(start.w + Math.round((ev.clientX - start.x) / (colW + gap)), 2, 12);
+      p.h = clamp(start.h + Math.round((ev.clientY - start.y) / (rowH + gap)), 2, 12);
+      el.style.gridColumn = `span ${p.w}`;
+      el.style.gridRow = `span ${p.h}`;
+      badge.textContent = `${p.w} × ${p.h}`;
+    };
+    const up = () => { badge.remove(); removeEventListener('pointermove', move); removeEventListener('pointerup', up); save(); if (editing === p.id) renderEditor(); };
+    addEventListener('pointermove', move);
+    addEventListener('pointerup', up);
+  }
+
+  // ---------- controls: dashboard-wide filters ----------
+  function distinctValues(col) {
+    const set = new Set();
+    for (const t of Object.values(TABLES)) if (t.cols.some((c) => c[0] === col)) t.rows.forEach((r) => { if (r[col] != null) set.add(String(r[col])); });
+    return [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }
+  function renderControls() {
+    const d = D();
+    $('controls').replaceChildren(...d.controls.map((c) => {
+      const reach = d.panels.filter((p) => appliesTo(c, p)).length;
+      const x = h('button', { class: 'x', title: 'Remove this control', onclick: () => { d.controls.splice(d.controls.indexOf(c), 1); save(); renderControls(); renderPanels(); } }, icon('close'));
+      const changed = () => { save(); renderControls(); renderPanels(); if (editing) renderEditor(); };
+      if (c.kind === 'choice') {
+        return h('span', { class: 'ctl' + (controlSet(c) ? ' set' : ''), title: `Applies to ${reach} panel${reach === 1 ? '' : 's'}` },
+          h('span', { class: 'ctl-name' }, c.col),
+          h('select', { onchange: (e) => { c.value = e.target.value || null; changed(); } },
+            h('option', { value: '' }, 'All'), distinctValues(c.col).map((v) => h('option', { value: v, selected: c.value === v }, v))), x);
+      }
+      return h('span', { class: 'ctl' + (controlSet(c) ? ' set' : ''), title: `Applies to ${reach} panel${reach === 1 ? '' : 's'}` },
+        h('span', { class: 'ctl-name' }, c.col),
+        h('select', { onchange: (e) => { c.preset = e.target.value; if (c.preset === 'custom' && !c.from) { c.from = addDays(MAX_DATE, -29); c.to = MAX_DATE; } changed(); } },
+          PRESETS.map(([k, l]) => h('option', { value: k, selected: c.preset === k }, l))),
+        c.preset === 'custom' ? [
+          h('input', { type: 'date', value: c.from || '', onchange: (e) => { c.from = e.target.value; changed(); } }),
+          h('span', { class: 'muted small' }, 'to'),
+          h('input', { type: 'date', value: c.to || '', onchange: (e) => { c.to = e.target.value; changed(); } })] : null, x);
+    }),
+    d.controls.some(controlSet) ? h('button', { class: 'link small', onclick: () => { d.controls.forEach((c) => { c.value = null; c.preset = 'all'; }); save(); renderControls(); renderPanels(); } }, 'Clear all') : '');
+  }
+  function addControlMenu(anchor) {
+    const d = D();
+    const cols = new Map();
+    for (const [t, T] of Object.entries(TABLES)) for (const [c, ty] of T.cols) if (!isId(c) && ty !== 'real' && ty !== 'int') cols.set(c, ty);
+    const items = [...cols].filter(([c]) => !d.controls.some((x) => x.col === c)).map(([c, ty]) => {
+      const reach = d.panels.filter((p) => p.follow && typeOf(p.source, c)).length;
+      return { label: c, hint: ty === 'date' ? 'date range' : 'pick a value', badge: `${reach} panel${reach === 1 ? '' : 's'}`,
+        onclick: () => { d.controls.push(ty === 'date' ? { id: newId(), col: c, kind: 'dates', preset: 'all' } : { id: newId(), col: c, kind: 'choice', value: null }); save(); renderControls(); renderPanels(); } };
+    });
+    menu(anchor, items.length ? items : [{ label: 'Every column already has a control', disabled: true, onclick() {} }], 'Filter every panel by');
+  }
+
+  // ---------- dashboards: pick, rename, add ----------
+  function renderDashName() {
+    const box = $('dash-name');
+    const sel = h('select', {
+      class: 'dash-pick', onchange: (e) => {
+        if (e.target.value === '+new') {
+          const d = { id: newId(), name: `Dashboard ${state.dashboards.length + 1}`, controls: [], colors: {}, panels: [] };
+          state.dashboards.push(d); state.active = d.id;
+        } else if (e.target.value === '+rename') {
+          return rename();
+        } else state.active = e.target.value;
+        closeDrawer(); save(); renderAll();
+      },
+    }, state.dashboards.map((d) => h('option', { value: d.id, selected: d.id === D().id }, d.name)),
+    h('option', { disabled: true }, '──────'), h('option', { value: '+rename' }, 'Rename…'), h('option', { value: '+new' }, 'New dashboard'));
+    box.replaceChildren(sel);
+    function rename() {
+      const inp = h('input', { type: 'text', class: 'rename', value: D().name,
+        onkeydown: (e) => { if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') { inp.value = D().name; inp.blur(); } },
+        onblur: () => { if (inp.value.trim()) D().name = inp.value.trim(); save(); renderDashName(); } });
+      box.replaceChildren(inp);
+      inp.select();
+    }
+  }
+
+  // ---------- suggestions, from the schema alone ----------
+  function suggestions() {
+    const out = [];
+    for (const [t, T] of Object.entries(TABLES)) {
+      const key = 't:' + t;
+      const dates = T.cols.filter((c) => c[1] === 'date').map((c) => c[0]);
+      const nums = T.cols.filter((c) => (c[1] === 'real' || c[1] === 'int') && !isId(c[0])).map((c) => c[0]);
+      const texts = T.cols.filter((c) => c[1] === 'text').map((c) => c[0]);
+      out.push(panel({ title: cap(t), type: 'number', source: key, w: 3, h: 2 }));
+      nums.filter((n) => T.cols.find((c) => c[0] === n)[1] === 'real').forEach((n) => out.push(panel({ title: `Total ${n}`, type: 'number', source: key, measures: [{ fn: 'sum', col: n }], w: 3, h: 2 })));
+      dates.slice(0, 1).forEach((d) => out.push(panel({ title: `${cap(t)} per month`, type: 'line', source: key, by: d, bucket: 'month', w: 8, h: 5 })));
+      for (const c of texts) {
+        const n = new Set(T.rows.map((r) => r[c])).size;
+        if (n <= 5) out.push(panel({ title: `${cap(t)} by ${c}`, type: 'mix', source: key, by: c, w: 6, h: 3 }));
+        else if (n <= 12) out.push(panel({ title: `${cap(t)} by ${c}`, type: 'bars', source: key, by: c, w: 4, h: 5 }));
+        else if (n <= 500) out.push(panel({ title: `Top ${c}`, type: 'table', source: key, by: c, measures: [{ fn: 'count' }, ...nums.slice(-1).map((x) => ({ fn: 'sum', col: x }))], w: 6, h: 6 }));
+      }
+    }
+    return out;
+  }
+  function starterPanels() {
+    const all = suggestions();
+    const nums = all.filter((p) => p.type === 'number').slice(0, 4);
+    nums.forEach((p) => { p.w = 12 / nums.length; });
+    const pick = [...nums, ...all.filter((p) => p.type === 'line').slice(0, 1), ...all.filter((p) => p.type === 'bars' || p.type === 'mix').slice(0, 3), ...all.filter((p) => p.type === 'table').slice(0, 1)];
+    const d = D();
+    d.panels = pick;
+    const dateCol = pick.map((p) => colsOf(p.source).find((c) => c[1] === 'date')).find(Boolean);
+    if (dateCol && !d.controls.length) d.controls.push({ id: newId(), col: dateCol[0], kind: 'dates', preset: 'all' });
+    save(); renderAll();
+    toast(`Added ${pick.length} panels from this database’s columns. Edit any of them.`);
+  }
+
+  // ---------- the editor drawer ----------
+  function closeDrawer() { editing = null; $('drawer').hidden = true; document.querySelectorAll('.panel.editing').forEach((e) => e.classList.remove('editing')); }
+
+  function openAdd() {
+    editing = null;
+    document.querySelectorAll('.panel.editing').forEach((e) => e.classList.remove('editing'));
+    const dr = $('drawer');
+    dr.hidden = false;
+    const add = (p) => { D().panels.push(p); save(); renderPanels(); openEditor(p.id); document.querySelector(`.panel[data-id="${p.id}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); };
+    dr.replaceChildren(
+      h('div', { class: 'drawer-head' }, h('h2', { class: 'tool-label' }, 'Add a panel'), h('button', { class: 'icon', title: 'Close', onclick: closeDrawer }, icon('close'))),
+      h('div', { class: 'drawer-body' },
+        h('div', { class: 'sec' }, h('span', { class: 'tool-label' }, 'Suggested for this database'),
+          h('p', { class: 'muted small', style: 'margin:0' }, 'Worked out from the tables and columns. Add one, then change anything.'),
+          h('div', { class: 'sug' }, suggestions().map((p) => h('button', { onclick: () => add(p) }, glyph(p.type),
+            h('span', { class: 't' }, p.title, h('span', null, `${TYPES.find((t) => t[0] === p.type)[1]} · ${source(p.source).name}${p.by ? ' by ' + p.by : ''}`)))))),
+        h('div', { class: 'sec' }, h('span', { class: 'tool-label' }, 'Or start from'),
+          h('div', { class: 'sug' },
+            Object.keys(QUERIES).map((q) => h('button', { onclick: () => add(panel({ title: q, source: 'q:' + q, by: 'category' })) }, glyph('bars'),
+              h('span', { class: 't' }, `The “${q}” query`, h('span', null, 'an open query tab, with its steps')))),
+            h('button', { onclick: () => add(panel({ title: 'New panel', by: 'region' })) }, glyph('bars'), h('span', { class: 't' }, 'A blank panel', h('span', null, 'choose everything yourself')))))));
+  }
+
+  function openEditor(id) {
+    editing = id;
+    document.querySelectorAll('.panel').forEach((e) => e.classList.toggle('editing', e.dataset.id === id));
+    $('drawer').hidden = false;
+    renderEditor();
+  }
+
+  function renderEditor() {
+    const p = P(editing);
+    if (!p) return closeDrawer();
+    const dr = $('drawer');
+    const scroll = dr.querySelector('.drawer-body')?.scrollTop || 0;
+    const cols = colsOf(p.source);
+    const upd = (fn, full = true) => (e) => { fn(e); save(); redraw(p); if (full) renderEditor(); };
+    const field = (label, ...ctl) => h('div', { class: 'field' }, h('label', null, label), ...ctl);
+    const check = (label, prop, hint) => h('label', { class: 'checkline', title: hint || '' },
+      h('input', { type: 'checkbox', checked: !!p[prop], onchange: upd((e) => { p[prop] = e.target.checked; }) }), label);
+    const select = (value, options, onchange) => h('select', { onchange }, options.map(([v, l]) => h('option', { value: v, selected: String(value) === String(v) }, l)));
+    const isDate = typeOf(p.source, p.by) === 'date';
+    const grouped = p.type !== 'number';
+    const numCols = cols.filter((c) => c[1] === 'int' || c[1] === 'real');
+
+    const measureRows = p.measures.map((m, i) => h('div', { class: 'field' }, h('label', null, i === 0 ? (p.type === 'number' ? 'Figure' : 'Value') : ''),
+      h('div', { class: 'pair' },
+        select(m.fn, Object.entries(FN).map(([k, l]) => [k, k === 'count' ? 'Number of rows' : k === 'distinct' ? 'Number of different' : l]),
+          upd((e) => { m.fn = e.target.value; if (m.fn !== 'count' && !m.col) m.col = (m.fn === 'distinct' ? cols[0] : numCols[numCols.length - 1] || cols[0])[0]; })),
+        m.fn !== 'count' ? select(m.col, (m.fn === 'distinct' ? cols : numCols).map((c) => [c[0], c[0]]), upd((e) => { m.col = e.target.value; })) : null,
+        p.measures.length > 1 ? h('button', { class: 'x', title: 'Remove', onclick: upd(() => { p.measures.splice(i, 1); }) }, icon('close')) : null)));
+
+    const typeOpts = [];
+    if (['bars', 'columns', 'table', 'mix'].includes(p.type) && p.by) {
+      typeOpts.push(field('Order', select(p.sort, [['value', 'Biggest first'], ['value-asc', 'Smallest first'], ['label', isDate ? 'Date order' : 'A to Z']], upd((e) => { p.sort = e.target.value; }))));
+      typeOpts.push(field('Show', h('div', { class: 'pair' },
+        select(p.top || 0, [[5, 'Top 5'], [10, 'Top 10'], [20, 'Top 20'], [50, 'Top 50'], [0, 'All']], upd((e) => { p.top = +e.target.value; })))));
+      if (p.top) typeOpts.push(check('Add the rest together as “Other”', 'other'));
+    }
+    if (p.type === 'number') {
+      typeOpts.push(check('Compare with the previous period', 'compare', 'Uses the date control, or the last 12 months'));
+      typeOpts.push(check('Show a trend line', 'spark'));
+    }
+    if (p.type === 'bars' || p.type === 'mix') typeOpts.push(check('Show % of the total', 'showPct'));
+    if (p.type === 'table') typeOpts.push(check('Shade cells: green high, red low', 'heat'));
+    if (p.type === 'line') typeOpts.push(check('Fill under the line', 'fill'));
+    if (p.type === 'bars' || p.type === 'columns') typeOpts.push(check('A colour for each value', 'colorBy', 'Uses the dashboard’s colours for this column'));
+    const perValue = p.by && (p.type === 'mix' || ((p.type === 'bars' || p.type === 'columns') && p.colorBy)) && !isDate;
+    const valueColours = perValue ? (() => {
+      const { groups: gs } = groups(p);
+      return h('div', { class: 'value-colours' },
+        h('div', { class: 'muted small' }, `Colours for ${p.by}, shared by every panel on this dashboard:`),
+        gs.slice(0, 10).map((g, i) => h('div', null,
+          h('button', { class: 'swatch', style: `background:${colourFor(p, g, i)}`, title: 'Click to change', onclick: (e) => swatchMenu(e.currentTarget, (c) => { const d = D(); d.colors[p.by] = d.colors[p.by] || {}; d.colors[p.by][g.key] = c; save(); renderPanels(); renderEditor(); }) }),
+          h('span', null, g.label))));
+    })() : null;
+    const single = !perValue && p.type !== 'table' || p.type === 'calendar';
+
+    const W = [[3, '¼'], [4, '⅓'], [6, '½'], [8, '⅔'], [12, 'Full']];
+    const HH = [[2, 'Short'], [3, 'Low'], [5, 'Medium'], [7, 'Tall']];
+    dr.replaceChildren(
+      h('div', { class: 'drawer-head' }, h('h2', { class: 'tool-label' }, 'Edit panel'), h('button', { class: 'icon', title: 'Close', onclick: closeDrawer }, icon('close'))),
+      h('div', { class: 'drawer-body' },
+        h('div', { class: 'sec' }, h('span', { class: 'tool-label' }, 'Show as'),
+          h('div', { class: 'types' }, TYPES.map(([k, l]) => h('button', {
+            class: 'type' + (p.type === k ? ' on' : ''), title: l,
+            onclick: upd(() => {
+              p.type = k;
+              if (k === 'number') { p.w = Math.min(p.w, 4); p.h = 2; }
+              if (k === 'line' || k === 'calendar') { const d = cols.find((c) => c[1] === 'date'); if (d && typeOf(p.source, p.by) !== 'date') { p.by = d[0]; p.bucket = k === 'line' ? 'month' : 'day'; } }
+              if (k !== 'number' && k !== 'calendar' && !p.by) p.by = (cols.find((c) => c[1] === 'text') || cols[0])[0];
+              if (k === 'calendar') p.h = Math.max(p.h, 6);
+              if (k === 'number' && p.h > 2) p.h = 2;
+            }),
+          }, glyph(k), l)))),
+        h('div', { class: 'sec' }, h('span', { class: 'tool-label' }, 'Data'),
+          field('From', select(p.source, [...Object.keys(TABLES).map((t) => ['t:' + t, `${t} (table)`]), ...Object.keys(QUERIES).map((q) => ['q:' + q, `${q} (query)`])],
+            upd((e) => { p.source = e.target.value; const cs = colsOf(p.source); if (p.by && !cs.some((c) => c[0] === p.by)) p.by = (cs.find((c) => c[1] === 'text') || cs[0])[0]; p.measures = p.measures.filter((m) => !m.col || cs.some((c) => c[0] === m.col)); if (!p.measures.length) p.measures = [{ fn: 'count' }]; }))),
+          grouped && p.type !== 'calendar' ? field(p.type === 'line' || p.type === 'columns' ? 'Along the bottom' : 'Group by', h('div', { class: 'pair' },
+            select(p.by || '', [['', '(nothing)'], ...cols.map((c) => [c[0], c[0]])], upd((e) => { p.by = e.target.value || null; if (typeOf(p.source, p.by) === 'date' && !p.bucket) p.bucket = 'month'; })),
+            isDate ? select(p.bucket, BUCKETS, upd((e) => { p.bucket = e.target.value; })) : null)) : null,
+          p.type === 'calendar' ? field('Dates', select(p.by, cols.filter((c) => c[1] === 'date').map((c) => [c[0], c[0]]), upd((e) => { p.by = e.target.value; }))) : null,
+          measureRows,
+          p.type === 'table' || p.type === 'line' ? h('div', { class: 'checkline' }, h('button', { class: 'link small', onclick: upd(() => { p.measures.push({ fn: 'sum', col: (numCols[numCols.length - 1] || cols[0])[0] }); }) }, p.type === 'line' ? '+ Add another line' : '+ Add a column')) : null,
+          check('Follow the dashboard controls', 'follow', 'Untick to keep this panel fixed whatever the controls say'),
+          h('div', { class: 'steps-read' }, h('b', null, 'As steps: '), stepsText(p).join(' → '), ' ',
+            h('button', { class: 'link small', onclick: () => toast('Would open a query tab with these steps, to filter, merge or add figures') }, 'Edit in Explore'))),
+        h('div', { class: 'sec' }, h('span', { class: 'tool-label' }, 'Look'),
+          field('Title', h('input', { type: 'text', value: p.title, oninput: upd((e) => { p.title = e.target.value; }, false) })),
+          field(p.type === 'number' ? 'Caption' : 'Note', h('input', { type: 'text', value: p.note, placeholder: p.type === 'number' ? mLabel(p.measures[0]) : 'optional, shown by the title', oninput: upd((e) => { p.note = e.target.value; }, false) })),
+          field('Numbers', h('div', { class: 'pair' },
+            select(p.format, [['number', '1,234'], ['money', '£1,234'], ['percent', '12%']], upd((e) => { p.format = e.target.value; })),
+            select(p.decimals ?? 'auto', [['auto', 'Auto'], [0, '0 dp'], [1, '1 dp'], [2, '2 dp']], upd((e) => { p.decimals = e.target.value === 'auto' ? null : +e.target.value; })))),
+          single ? field('Colour', h('div', { class: 'swatches' }, PALETTE.map((c) => h('button', { class: 'swatch' + (p.color === c ? ' on' : ''), style: `background:${c}`, title: c, onclick: upd(() => { p.color = c; }) })))) : null,
+          typeOpts, valueColours),
+        h('div', { class: 'sec' }, h('span', { class: 'tool-label' }, 'Size'),
+          field('Width', h('div', { class: 'sizes segmented' }, W.map(([v, l]) => h('button', { class: 'seg small' + (p.w === v ? ' on' : ''), onclick: upd(() => { p.w = v; }) }, l)))),
+          field('Height', h('div', { class: 'sizes segmented' }, HH.map(([v, l]) => h('button', { class: 'seg small' + (p.h === v ? ' on' : ''), onclick: upd(() => { p.h = v; }) }, l)))),
+          h('p', { class: 'muted small', style: 'margin:0 0 0 102px' }, 'Or use Edit layout to drag and resize.'))),
+      h('div', { class: 'drawer-foot' },
+        h('button', { class: 'ghost small', onclick: () => removePanel(p) }, 'Remove'),
+        h('button', { class: 'ghost small', onclick: (e) => pop(e.currentTarget, h('div', { class: 'popover sqlpop' }, h('pre', null, sqlFor(p)))) }, 'Show SQL'),
+        h('span', { class: 'spacer' }),
+        h('button', { class: 'primary small', onclick: closeDrawer }, 'Done')));
+    dr.querySelector('.drawer-body').scrollTop = scroll;
+  }
+
+  function swatchMenu(anchor, onPick) {
+    pop(anchor, h('div', { class: 'popover', style: 'width:auto' }, h('div', { class: 'swatches' },
+      PALETTE.map((c) => h('button', { class: 'swatch', style: `background:${c}`, onclick: () => { closePop(); onPick(c); } })))));
+  }
+
+  // ---------- wiring ----------
+  function renderAll() {
+    renderDashName();
+    renderControls();
+    renderPanels();
+  }
+
+  $('tab-dash').append(icon('dash'), h('span', { class: 'qtab-name' }, 'Dashboards'));
+  document.querySelectorAll('.mocktab').forEach((t) => t.addEventListener('click', () => toast(`In the app this is the “${t.textContent}” tab; panels can be made from any of them.`)));
+  $('add-control').addEventListener('click', (e) => addControlMenu(e.currentTarget));
+  $('btn-add').addEventListener('click', () => openAdd());
+  $('btn-layout').addEventListener('click', () => {
+    layoutMode = !layoutMode;
+    $('grid').classList.toggle('layout', layoutMode);
+    $('btn-layout').classList.toggle('on', layoutMode);
+    $('btn-layout').textContent = layoutMode ? 'Done arranging' : 'Edit layout';
+    renderPanels();
+  });
+  $('reset').addEventListener('click', () => { try { localStorage.removeItem(STORE); } catch (_) { /* */ } load(); closeDrawer(); renderAll(); toast('Back to the sample dashboard'); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closePop(); if (!$('drawer').hidden) closeDrawer(); } });
+
+  load();
+  renderAll();
+})();
+</script>
+</body>
+</html>

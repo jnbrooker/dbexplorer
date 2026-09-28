@@ -264,6 +264,22 @@ class Server(unittest.TestCase):
         self.assertEqual(result.get("code"), 409)
         self.assertEqual(r["rows"], [[1]])
 
+    def test_dashboards_are_saved_next_to_the_database(self):
+        folder = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, folder, ignore_errors=True)
+        path = os.path.join(folder, "copy.sqlite")
+        shutil.copy(SAMPLE, path)
+        db = self.call("api/open", {"path": path})
+        self.assertIsNone(self.call("api/dashboards", {"id": db["id"]})["data"])
+        data = {"version": 1, "dashboards": [{"id": "d1", "name": "Sales", "panels": []}]}
+        r = self.call("api/dashboards/save", {"id": db["id"], "data": data})
+        self.assertEqual(r["file"], path + ".dashboards.json")
+        self.assertEqual(self.call("api/dashboards", {"id": db["id"]})["data"], data)
+        self.assertEqual(sorted(os.listdir(folder)), ["copy.sqlite", "copy.sqlite.dashboards.json"])
+        with self.assertRaises(urllib.error.HTTPError) as e:
+            self.call("api/dashboards/save", {"id": db["id"], "data": "not a dict"})
+        self.assertEqual(e.exception.code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()
