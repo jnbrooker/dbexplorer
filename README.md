@@ -36,7 +36,9 @@ It's built like Power Query. Every change you make becomes a step in
 **Applied steps** on the right, such as *Source: orders → Merged with
 customers → Filtered: status = shipped → Sorted by date ↓*. Click a step to see
 the data at that point, edit it (✎), move it, or delete it. Steps apply in
-order, so a filter after a Group by filters the groups. **Undo** (⌘Z / Ctrl+Z) steps
+order, so a filter after a Group by filters the groups. **Remove all filters**
+under the steps deletes every filter step at once, and empties the search
+box (so does moving to another table). **Undo** (⌘Z / Ctrl+Z) steps
 back. Queries open as tabs and are remembered for each database.
 
 **Click the data instead of building filters.**
@@ -62,6 +64,16 @@ back. Queries open as tabs and are remembered for each database.
   numbers and dates are searched as text, so "2024-03" finds March. On big
   tables it searches the first 200,000 rows straight away, then *Search all
   rows* when you want everything.
+
+- **Facets:** open the *Facets* panel (right-hand edge, hidden to start with)
+  to see the most common values of a few columns, with counts that follow
+  your steps, like Datasette. Click a value to keep only it, or its × to
+  remove it. *Full table* shows every value and its count in the grid (a
+  Group by, most common first). It picks likely columns for you; add others with *Add* or
+  *Show in facets* on a column heading. It costs nothing while hidden. Open,
+  it waits until the rows are on screen, then counts every facet in one pass
+  over the first 200,000 rows (*Count all rows* for the rest). Results are
+  cached, so Undo, sorting and page turns are instant.
 
 The typed filters are still there (contains, between, is one of…) for when
 you need them.

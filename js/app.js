@@ -193,6 +193,7 @@
   }
 
   function activate(id) {
+    if (id !== activeId) clearSearch();
     activeId = id;
     closeLayer();
     const q = Q();
@@ -263,6 +264,21 @@
     commit();
   }
 
+  // Delete every filter step, keeping the view on the same step where it survives.
+  function removeFilters() {
+    const q = Q();
+    if (!q || !q.steps.some((s) => s.type === 'filter')) return;
+    snapshot(q);
+    const vi = viewIndex(q);
+    const kept = q.steps.filter((s, i) => i <= vi && s.type !== 'filter').length - 1;
+    q.steps = q.steps.filter((s) => s.type !== 'filter');
+    q.view = q.view == null || kept >= q.steps.length - 1 ? null : kept;
+    q.editing = null;
+    q.page = 0;
+    clearSearch();
+    commit();
+  }
+
   function moveStep(index, delta) {
     const q = Q();
     const to = index + delta;
@@ -302,7 +318,7 @@
     try {
       localStorage.setItem(storeKey(), JSON.stringify({
         active: activeId,
-        queries: queries.map(({ id, name, steps, view }) => ({ id, name, steps, view })),
+        queries: queries.map(({ id, name, steps, view, facets }) => ({ id, name, steps, view, facets })),
       }));
     } catch (_) { /* storage unavailable */ }
   }
@@ -433,6 +449,7 @@
     $('explore-panel').hidden = sql || !Q();
     $('sql-panel').hidden = !sql;
     $('steps-panel').hidden = sql || !Q();
+    $('facets-panel').hidden = sql || !Q();
     $('btn-show-sql').hidden = sql;
     $('search-box').hidden = sql || !Q();
     if (sql) $('search-results').hidden = true;
@@ -521,6 +538,9 @@
       return li;
     }));
     $('btn-undo').disabled = !q.undo.length;
+    const filters = q.steps.filter((s) => s.type === 'filter').length;
+    $('steps-foot').hidden = !filters;
+    $('btn-clear-filters').textContent = filters > 1 ? `Remove all ${filters} filters` : 'Remove the filter';
   }
 
   function stepMenu(anchor, i, li) {
@@ -731,8 +751,10 @@
       $('result-count').textContent = 'Pick a table on the left to start.';
       $('grid').replaceChildren();
       $('pager').replaceChildren();
+      facetsUnavailable();
       return;
     }
+    $('facets').classList.add('loading'); // keep the old counts, dimmed, until the new ones arrive
     const vi = viewIndex(q);
     const banner = $('view-banner');
     banner.hidden = vi === q.steps.length - 1;
@@ -743,6 +765,7 @@
 
     const c = compileView(q);
     if (c.error && c.error.step <= vi) {
+      facetsUnavailable();
       showResultError(`Step ${c.error.step + 1} (“${P.describe(q.steps[c.error.step])}”) has a problem: ${c.error.message}. Edit or delete it in Applied steps.`);
       return;
     }
@@ -776,7 +799,7 @@
     try {
       const r = await query(c.sql + ' LIMIT ? OFFSET ?', [...c.params, PAGE_SIZE, q.page * PAGE_SIZE], 'page', PAGE_SIZE, workLabel(q));
       if (stale()) return;
-      lastGrid = { cols: c.cols, rows: r.rows, order: c.order };
+      lastGrid = { cols: c.cols, rows: r.rows, order: c.order, sql: c.sql };
       renderGrid(c.cols, r.rows, c.order);
       // Keep search counts in step with what's on screen (not on page turns).
       if (srch.text) {
@@ -785,6 +808,7 @@
       }
       lastPage = { rows: r.rows.length, more: r.more };
       renderPager();
+      loadFacets(); // after the page, so facets never hold up the rows on screen
     } catch (e) {
       if (stale()) return;
       if (e instanceof CancelledError && userCancelled.delete('page')) showStopped(refresh);
@@ -931,6 +955,7 @@
       { label: numeric ? 'Filter by a range…' : 'Filter by text…', hint: numeric ? 'greater than, between…' : 'contains, starts with…',
         onclick: () => addFilter({ col: col.name, op: numeric ? 'gte' : 'contains', value: '' }, true) },
       { label: 'Remove empty rows', onclick: () => addFilter({ col: col.name, op: 'notEmpty' }) },
+      { label: 'Show in facets', hint: 'its most common values, on the side', onclick: () => addFacet(col.name) },
       '-',
       { label: 'Group by this column', hint: 'number of rows for each value', onclick: () => addStep({ type: 'group', by: [col.name], measures: [{ fn: 'count' }] }, { edit: true }) },
       { label: 'Rename…', onclick: async () => {
@@ -1076,10 +1101,189 @@
     search.focus();
   }
 
+  // ---------- facets: the most common values of a few columns ----------
+  // Like Datasette's facets, with counts that follow the steps. Kept cheap:
+  // nothing runs while the panel is hidden; it waits until the page of rows is
+  // on screen; every facet comes from one query on its own connection (so a
+  // newer change interrupts it), reading at most the first VALUES_SAMPLE rows
+  // unless asked to count them all; and results are cached, so Undo, page
+  // turns and switching tabs don't query again.
+  const FACET_TOP = 8;
+  const facetCache = new Map(); // query signature -> rows [facet index, value, count]
+  const fct = { seq: 0, fullSig: null };
+  const facetsShown = () => !$('facets-panel').hidden && !$('facets-panel').classList.contains('collapsed');
+
+  // Columns worth faceting, judged from the page of rows already on screen (no
+  // extra query): a handful of repeated values, and not a measurement or an id
+  // (links to another table, like region_id, are fine).
+  function suggestFacets(cols, rows) {
+    if (rows.length < 20) return [];
+    const picks = [];
+    cols.forEach((c, k) => {
+      if (c.affinity === 'REAL' || (c.prov && P.primaryKey(c.prov.table, schema) === c.prov.column)) return;
+      if (/(^|_|\.)id$/i.test(c.name) && !P.parentOf(c, schema)) return;
+      const n = new Set(rows.map((r) => JSON.stringify(r[k]))).size;
+      if (n >= 2 && n <= 12 && n <= rows.length / 3) picks.push({ name: c.name, score: n + (c.affinity === 'TEXT' ? 0 : 6) });
+    });
+    return picks.sort((a, b) => a.score - b.score).slice(0, 3).map((p) => p.name);
+  }
+
+  // One pass: the sample is read once into `s`, then each facet groups it.
+  function facetQuery(c, names, full) {
+    const pick = names.map((n, i) => `${qi(n)} AS f${i}`).join(', ');
+    const each = names.map((n, i) => `SELECT * FROM (SELECT ${i}, f${i}, COUNT(*) FROM s GROUP BY f${i} ORDER BY 3 DESC, 2 LIMIT ${FACET_TOP + 1})`);
+    return {
+      sql: `WITH s AS (SELECT ${pick} FROM (${c.unsortedSql})${full ? '' : ` LIMIT ${VALUES_SAMPLE}`}) ${each.join(' UNION ALL ')}`,
+      params: c.params,
+    };
+  }
+
+  async function loadFacets() {
+    const seq = ++fct.seq;
+    const q = Q();
+    if (!facetsShown() || !q || activeId === 'sql') return;
+    const c = compileView(q);
+    if (c.error && c.error.step <= viewIndex(q)) return facetsUnavailable();
+    if (!q.facets && lastGrid && lastGrid.sql === c.sql) {
+      const picks = suggestFacets(lastGrid.cols, lastGrid.rows);
+      if (picks.length) { q.facets = picks; save(); }
+    }
+    const names = (q.facets || []).filter((n) => c.cols.some((col) => col.name === n));
+    const base = c.unsortedSql + '\u0000' + JSON.stringify(c.params);
+    const full = fct.fullSig === base;
+    const sig = [base, full, ...names].join('\u0000');
+    const draw = (rows) => drawFacets(q, c, names, rows, full, base);
+    if (!names.length || facetCache.has(sig)) return draw(facetCache.get(sig) || []);
+    $('facets').classList.add('loading');
+    try {
+      const { sql, params } = facetQuery(c, names, full);
+      const r = await query(sql, params, 'facets', names.length * (FACET_TOP + 1), full ? 'Counting facets in every row' : 'Counting facets');
+      if (facetCache.size >= 50) facetCache.delete(facetCache.keys().next().value);
+      facetCache.set(sig, r.rows);
+      if (seq === fct.seq) draw(r.rows);
+    } catch (e) {
+      if (seq !== fct.seq) return;
+      $('facets').classList.remove('loading');
+      if (e instanceof CancelledError && userCancelled.delete('facets')) {
+        $('facets').replaceChildren(h('p', { class: 'muted small pad' }, 'Stopped. ', h('button', { class: 'link small', onclick: loadFacets }, 'Try again')));
+      } else if (!(e instanceof CancelledError)) {
+        $('facets').replaceChildren(h('p', { class: 'error pad' }, e.message));
+      }
+    }
+  }
+
+  function drawFacets(q, c, names, rows, full, base) {
+    const box = $('facets');
+    box.classList.remove('loading');
+    if (!names.length) {
+      box.replaceChildren(
+        h('p', { class: 'muted small pad' }, 'See the most common values of a column here, with counts that follow your steps. Click a value to filter to it.'),
+        h('p', { class: 'pad' }, h('button', { class: 'ghost small', onclick: (e) => addFacetMenu(e.currentTarget) }, 'Choose a column')));
+      return;
+    }
+    // The step being viewed, if it's a "keep these values" filter a facet can clear.
+    const vi = viewIndex(q);
+    const cur = q.steps[vi];
+    const active = cur && cur.type === 'filter' && cur.conditions.length === 1 && cur.conditions[0].op === 'in' ? cur.conditions[0] : null;
+    const label = (v) => (v === '' ? '(blank)' : display(v, 60));
+    const sections = names.map((name, i) => {
+      const col = c.cols.find((x) => x.name === name);
+      const vals = rows.filter((r) => r[0] === i);
+      const shown = vals.slice(0, FACET_TOP);
+      const max = Math.max(1, ...shown.map((r) => r[2]));
+      return h('section', { class: 'facet' },
+        h('div', { class: 'facet-head' },
+          h('span', { class: 'facet-name', title: name }, name),
+          active && active.col === name ? h('button', { class: 'link small', title: `Delete the step “${P.describe(cur)}”`, onclick: () => deleteStep(vi) }, 'Clear filter') : null,
+          h('button', { class: 'icon', title: 'Stop showing this column', 'aria-label': `Stop showing ${name}`, onclick: () => removeFacet(name) }, icon('close'))),
+        shown.map(([, v, n]) => h('div', { class: 'facet-row' },
+          h('button', {
+            class: 'facet-value', style: `--w: ${(100 * n / max).toFixed(1)}%`, title: `Keep only rows where ${name} is ${label(v)}`,
+            onclick: () => addFilter({ col: name, op: 'in', value: [v] }),
+          }, h('span', { class: 'value' + (v === null || v === '' ? ' muted' : '') }, label(v)), h('span', { class: 'n' }, fmt(n))),
+          h('button', {
+            class: 'icon facet-exclude', title: `Remove rows where ${name} is ${label(v)}`, 'aria-label': `Remove rows where ${name} is ${label(v)}`,
+            onclick: () => addFilter({ col: name, op: 'in', value: [v], negate: true }),
+          }, icon('close')))),
+        shown.length ? null : h('p', { class: 'muted small pad' }, 'No rows.'),
+        h('div', { class: 'facet-foot' },
+          h('button', { class: 'link small', onclick: (e) => valuesFilter(e.currentTarget, col) },
+            vals.length > FACET_TOP ? 'All values…' : 'Tick values to keep…'),
+          h('button', { class: 'link small', title: `Group by ${name}: every value and how many rows have it, most common first`, onclick: () => facetTable(name) }, 'Full table')));
+    });
+    const sampled = !full && (lastTotal == null || lastTotal > VALUES_SAMPLE);
+    box.replaceChildren(...sections, sampled ? h('p', { class: 'muted small pad' },
+      `Counts from the first ${fmt(VALUES_SAMPLE)} rows. `,
+      h('button', { class: 'link small', onclick: () => { fct.fullSig = base; loadFacets(); } }, 'Count all rows')) : '');
+  }
+
+  // Every value with its count, in the grid: a Group by then a sort, as one change.
+  function facetTable(name) {
+    const q = Q();
+    snapshot(q);
+    const at = viewIndex(q) + 1;
+    q.steps.splice(at, 0, { type: 'group', by: [name], measures: [{ fn: 'count' }] });
+    const cols = P.compile(q.steps, schema, at, ctxFor(q)).cols || [];
+    if (cols.length > 1) q.steps.splice(at + 1, 0, { type: 'sort', by: [{ col: cols[cols.length - 1].name, dir: 'desc' }] });
+    const last = cols.length > 1 ? at + 1 : at;
+    q.view = last === q.steps.length - 1 ? null : last;
+    q.editing = null;
+    q.page = 0;
+    commit();
+  }
+
+  function facetsUnavailable() {
+    fct.seq++;
+    $('facets').classList.remove('loading');
+    $('facets').replaceChildren();
+  }
+
+  // Hiding the panel stops any facet query still running.
+  function stopFacets() {
+    fct.seq++;
+    $('facets').classList.remove('loading');
+    if (db && activity.has('facets')) api('cancel', { id: db.id, keys: ['facets'] }).catch(() => {});
+  }
+
+  function addFacet(name) {
+    const q = Q();
+    q.facets = (q.facets || []).filter((n) => n !== name).concat(name);
+    save();
+    if (facetsShown()) loadFacets();
+    else setPanel('facets-panel', false);
+  }
+
+  function removeFacet(name) {
+    const q = Q();
+    q.facets = (q.facets || []).filter((n) => n !== name);
+    save();
+    loadFacets();
+  }
+
+  function addFacetMenu(anchor) {
+    const q = Q();
+    const cols = (compileView(q).cols || []).filter((c) => !(q.facets || []).includes(c.name));
+    menu(anchor, cols.length
+      ? cols.map((c) => ({ label: c.name, onclick: () => addFacet(c.name) }))
+      : [{ label: 'Every column is already shown', disabled: true, onclick() {} }], 'Show the most common values of');
+  }
+
   // ---------- search across every column ----------
   // One pass over the rows counts matches in each column; click a column (or
   // "any of these") to turn the search into a filter step.
   const srch = { text: '', mode: 'contains', full: false, seq: 0, timer: null, sig: '' };
+
+  // Empty the search box, e.g. on moving to another table or clearing filters.
+  function clearSearch() {
+    clearTimeout(srch.timer);
+    srch.seq++;
+    srch.text = '';
+    srch.full = false;
+    srch.sig = '';
+    $('search-input').value = '';
+    $('search-results').hidden = true;
+    $('search-results').replaceChildren();
+  }
 
   function scheduleSearch(delay) {
     clearTimeout(srch.timer);
@@ -1757,6 +1961,7 @@
   // Open by default; each viewer's choice is remembered in this browser.
   function setPanel(id, hidden) {
     $(id).classList.toggle('collapsed', hidden);
+    if (id === 'facets-panel') { if (hidden) stopFacets(); else loadFacets(); }
     try {
       const saved = JSON.parse(localStorage.getItem('dbx.hiddenPanels') || '{}');
       saved[id] = hidden;
@@ -1778,7 +1983,7 @@
   }
 
   function initPanels() {
-    const edge = { 'tables-panel': ['left', 'right'], 'steps-panel': ['right', 'left'] }; // [hide, show] arrows
+    const edge = { 'tables-panel': ['left', 'right'], 'facets-panel': ['right', 'left'], 'steps-panel': ['right', 'left'] }; // [hide, show] arrows
     document.querySelectorAll('.panel-hide').forEach((b) => {
       b.append(icon(edge[b.dataset.panel][0]));
       b.addEventListener('click', () => setPanel(b.dataset.panel, true));
@@ -1789,7 +1994,8 @@
     });
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem('dbx.hiddenPanels') || '{}') || {}; } catch (_) { /* ignore */ }
-    for (const id of Object.keys(edge)) $(id).classList.toggle('collapsed', saved[id] === true);
+    // Facets start hidden: they cost a query per change, so they're opt-in.
+    for (const id of Object.keys(edge)) $(id).classList.toggle('collapsed', saved[id] ?? id === 'facets-panel');
   }
 
   // ---------- wiring ----------
@@ -1852,7 +2058,9 @@
     $('t-lookup').addEventListener('click', needQuery(() => combineDialog('lookup')));
     $('t-append').addEventListener('click', needQuery(() => combineDialog('append')));
 
+    $('btn-add-facet').addEventListener('click', needQuery((e) => addFacetMenu(e.currentTarget)));
     $('btn-undo').addEventListener('click', undo);
+    $('btn-clear-filters').addEventListener('click', removeFilters);
     $('btn-duplicate').addEventListener('click', needQuery(() => { const q = Q(); openQuery(clone(q.steps), q.name); }));
     $('btn-show-sql').addEventListener('click', () => {
       sqlShown = !sqlShown;

@@ -135,6 +135,16 @@
       </div>
     </section>
 
+    <aside id="facets-panel" class="steps-panel facets-panel">
+      <button class="panel-rail" data-panel="facets-panel" title="Show facets: the most common values of a few columns">Facets</button>
+      <div class="steps-head">
+        <h2>Facets</h2>
+        <button id="btn-add-facet" class="ghost small" title="Show the most common values of another column">Add</button>
+        <button class="icon panel-hide" data-panel="facets-panel" title="Hide facets" aria-label="Hide facets"></button>
+      </div>
+      <div id="facets" class="facets"></div>
+    </aside>
+
     <aside id="steps-panel" class="steps-panel">
       <button class="panel-rail" data-panel="steps-panel" title="Show applied steps">Applied steps</button>
       <div class="steps-head">
@@ -144,6 +154,9 @@
         <button class="icon panel-hide" data-panel="steps-panel" title="Hide applied steps" aria-label="Hide applied steps"></button>
       </div>
       <ol id="steps" class="steps"></ol>
+      <div id="steps-foot" class="steps-foot" hidden>
+        <button id="btn-clear-filters" class="ghost small" title="Delete every filter step in this query (Undo brings them back)">Remove all filters</button>
+      </div>
       <p class="muted small steps-tip">Click a step to see the data at that point. New steps go after the one selected.</p>
     </aside>
   </div>
