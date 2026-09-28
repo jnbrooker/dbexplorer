@@ -305,12 +305,9 @@ html[data-os=mac] [data-os=win], html[data-os=win] [data-os=mac] { display: none
 .pop-export .export-list .menu-label { font-size: 12px; }
 .result-count { font-weight: 700; font-size: 13px; }
 .hint-inline { margin-right: 4px; }
-.search-box { display: flex; margin-left: 12px; }
-.search-box input {
-  width: 240px; background: var(--green-tint); border-color: var(--green-tint-2);
-  border-radius: var(--radius) 0 0 var(--radius);
-}
-.search-box select { font-size: 11.5px; border-left: 0; border-radius: 0 var(--radius) var(--radius) 0; background: var(--surface-2); font-weight: 700; }
+.search-box { display: flex; gap: 8px; margin-left: 12px; }
+.search-box input { width: 240px; background: var(--green-tint); border-color: var(--green-tint-2); }
+.search-box select { font-size: 11.5px; border: 1px solid var(--border); background: var(--surface-2); font-weight: 700; }
 .search-results {
   display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
   background: var(--surface); box-shadow: var(--panel-shadow);
