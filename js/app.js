@@ -338,6 +338,7 @@
     }
     countCache.clear();
     if (!keep) {
+      setBasket([]);
       queries = [];
       activeId = null;
       if (!restore()) {
@@ -405,6 +406,7 @@
   function showLanding() {
     db = null; schema = null; queries = []; activeId = null;
     countCache.clear();
+    setBasket([]);
     closeLayer();
     closeInspector();
     $('workspace').hidden = true;
@@ -1669,18 +1671,76 @@
     }
   }
 
-  const exportCurrent = withErrors(async () => {
+  // The data on screen as one export sheet, or null (with a message) if it can't be exported.
+  function currentSheet() {
     if (activeId === 'sql') {
       const sql = userSql();
-      if (sql) await startExport([{ name: 'Query', sql, params: [] }], `query-${today()}.xlsx`, null);
-      return;
+      return sql ? { sheet: { name: 'Query', sql, params: [] }, rows: null } : null;
     }
     const q = Q();
-    if (!q) return;
+    if (!q) return null;
     const c = compileView(q);
-    if (c.error && c.error.step <= viewIndex(q)) return toast('Fix the step with a problem first.', true);
-    await startExport([{ name: q.name, sql: c.sql, params: c.params, columns: c.cols.map((x) => x.name) }], `${q.name}-${today()}.xlsx`, lastTotal);
+    if (c.error && c.error.step <= viewIndex(q)) { toast('Fix the step with a problem first.', true); return null; }
+    return { sheet: { name: q.name, sql: c.sql, params: c.params, columns: c.cols.map((x) => x.name) }, rows: lastTotal };
+  }
+
+  const exportCurrent = withErrors(async () => {
+    const cur = currentSheet();
+    if (cur) await startExport([cur.sheet], `${activeId === 'sql' ? 'query' : cur.sheet.name}-${today()}.xlsx`, cur.rows);
   });
+
+  // Views saved for a multi-sheet export. Each is a snapshot of the query as it was
+  // when added, so later edits to the tab don't change what's already queued.
+  let basket = [];
+
+  function setBasket(list) {
+    basket = list;
+    const caret = $('btn-export-more');
+    caret.replaceChildren(icon('chevron'));
+    if (basket.length) caret.prepend(h('span', { class: 'split-count' }, fmt(basket.length)));
+    caret.title = basket.length ? `${basket.length} ${basket.length === 1 ? 'sheet' : 'sheets'} in the export` : 'Add to a multi-sheet export';
+  }
+
+  function addToBasket() {
+    const cur = currentSheet();
+    if (!cur) return;
+    setBasket([...basket, cur]);
+    toast(`Added “${cur.sheet.name}” to the export (${basket.length} ${basket.length === 1 ? 'sheet' : 'sheets'}).`);
+  }
+
+  const downloadBasket = withErrors(async () => {
+    if (!basket.length) return;
+    const total = basket.every((b) => b.rows != null) ? basket.reduce((n, b) => n + b.rows, 0) : null;
+    const list = basket;
+    await startExport(list.map((b) => b.sheet), `${db.name.replace(/\.[^.]+$/, '')}-export-${today()}.xlsx`, total);
+    if (basket === list) setBasket([]);
+  });
+
+  function exportMenu(anchor) {
+    if (isOpenFor(anchor)) return closeLayer();
+    const render = () => {
+      const n = basket.length;
+      body.replaceChildren(
+        h('button', { class: 'primary', onclick: () => { addToBasket(); render(); } }, 'Add to export'),
+        n ? h('ul', { class: 'export-list' }, basket.map((b, i) => h('li', null,
+          h('span', { class: 'menu-label' }, b.sheet.name,
+            h('span', { class: 'menu-hint' }, b.rows != null ? `${fmt(b.rows)} rows` : 'rows not counted')),
+          h('button', { class: 'icon', title: 'Rename sheet', onclick: async (e) => {
+            const name = await askText(e.currentTarget, 'Sheet name', b.sheet.name, 'Rename');
+            if (name && name.trim()) { b.sheet.name = name.trim(); setBasket([...basket]); }
+            exportMenu(anchor);
+          } }, icon('edit')),
+          h('button', { class: 'x', title: 'Remove from export', onclick: () => { setBasket(basket.filter((_, j) => j !== i)); render(); } }, icon('close')))))
+          : h('p', { class: 'muted small' }, 'Add views here one at a time, then download them together as one Excel file with a sheet each.'),
+        n ? h('div', { class: 'row end' },
+          h('button', { class: 'ghost small', onclick: () => { setBasket([]); render(); } }, 'Clear'),
+          h('button', { class: 'primary small', onclick: () => { closeLayer(); downloadBasket(); } },
+            `Download ${n} ${n === 1 ? 'sheet' : 'sheets'}`)) : null);
+    };
+    const body = h('div', { class: 'pop-export' });
+    render();
+    popover(anchor, body);
+  }
 
   const exportAll = withErrors(async () => {
     const tables = Object.values(schema.tables).filter((t) => t.type === 'table');
@@ -1712,6 +1772,8 @@
     $('btn-reload').addEventListener('click', withErrors(async () => { await openPath(db.path, true); toast('Reloaded'); }));
     $('btn-export-all').addEventListener('click', exportAll);
     $('btn-export').addEventListener('click', exportCurrent);
+    $('btn-export-more').addEventListener('click', (e) => exportMenu(e.currentTarget));
+    setBasket([]);
     $('table-search').addEventListener('input', renderTableList);
 
     $('btn-run-sql').addEventListener('click', runSql);

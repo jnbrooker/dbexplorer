@@ -108,7 +108,10 @@
           <span class="spacer"></span>
           <span class="muted small hint-inline">Click a cell or a column heading for options</span>
           <button id="btn-show-sql" class="ghost small">Show SQL</button>
-          <button id="btn-export" class="primary">Download as Excel</button>
+          <div class="split-btn">
+            <button id="btn-export" class="primary">Download as Excel</button>
+            <button id="btn-export-more" class="primary split-caret" aria-label="More export options" aria-haspopup="true" title="Add to a multi-sheet export"></button>
+          </div>
         </div>
         <div id="search-results" class="search-results" role="status" hidden></div>
         <div id="sql-preview" class="sql-preview" hidden>

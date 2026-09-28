@@ -272,6 +272,21 @@ input[type=checkbox], input[type=radio] { accent-color: var(--green); }
 }
 .results-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; min-height: 28px; }
 .results-bar button, .result-count { white-space: nowrap; }
+.split-btn { display: inline-flex; }
+.split-btn > button:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.split-btn > .split-caret {
+  border-top-left-radius: 0; border-bottom-left-radius: 0; border-left-color: var(--green-hover);
+  padding: 5px 6px; display: inline-flex; align-items: center; gap: 4px;
+}
+.split-count {
+  background: var(--on-green); color: var(--green); border-radius: 8px; padding: 0 5px;
+  font-size: 10.5px; line-height: 15px; font-variant-numeric: tabular-nums;
+}
+.pop-export { display: flex; flex-direction: column; gap: 8px; }
+.pop-export .export-list { list-style: none; margin: 0; padding: 0; max-height: 40vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+.pop-export .export-list li { display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-bottom: 1px solid var(--rule); }
+.pop-export .export-list li:last-child { border-bottom: 0; }
+.pop-export .export-list .menu-label { font-size: 12px; }
 .result-count { font-weight: 700; font-size: 13px; }
 .hint-inline { margin-right: 4px; }
 .search-box { display: flex; margin-left: 12px; }
