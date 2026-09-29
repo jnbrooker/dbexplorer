@@ -54,7 +54,9 @@
   const LON_NAME = /^(lon|lng|long|longitude)$|[_ ](lon|lng|long|longitude)$|^(lon|lng|long|longitude)[_ ]/i;
   const MONEY_NAME = /(price|amount|revenue|cost|total|value|sales|gross|net|fee|paid|spend|income|profit|gbp|usd|eur)/i;
   const CODE_NAME = /(^|_)(ids?|uids?|uuids?|guids?|mbids?|keys?|hash|slug|urls?|uri|links?|zip|zipcode|postcode|postal_?code|phone|email|isbn|sku|wikidata_id)$/i;
-  const CODE_CAMEL = /[a-z](Id|Ids|Key|Code|Url|Uuid)$/;
+  const CODE_CAMEL = /[a-z](Id|Ids|Key|Code|Url|Uuid|Number|No|Ref)$/;
+  // Numbers that label something rather than measure it: account_number, card_no, order_ref.
+  const NUMBER_NAME = /(^|_)(number|no|num|nbr|ref|reference|account|acct|card|serial|pin|barcode|ean|upc)$/i;
   const META_NAME = /(^|_)(loaded|fetched|built|synced|imported|scraped|checked|run|refreshed|updated|modified|inserted)(_at|_on|_time|_date)?$|^last_(updated|modified|seen|checked|synced)|(^|_)(source|method|match|matched|confidence|basis|evidence|notes?|comments?|info|raw|json|payload|debug|version)$/i;
   const MEASURE_NAME = /(ticket|gross|revenue|sales|amount|price|cost|total|capacity|attendance|listeners|quantity|qty|value|spend|profit|income|fee|songs|views|plays|streams|score|points|goals|minutes|duration|distance|weight|population|shows|bookings)/i;
   // Things you'd total (tickets, gross) versus attributes you'd average (capacity, price).
@@ -90,13 +92,17 @@
       if (number && LON_NAME.test(c.name) && nums.every((n) => n >= -180 && n <= 180)) geo = 'lon';
       const share = (test) => (strs.length ? strs.filter(test).length / strs.length : 0);
       const pk = !!(isPk && isPk(c));
-      const codeName = CODE_NAME.test(c.name) || CODE_CAMEL.test(c.name);
+      const codeName = CODE_NAME.test(c.name) || CODE_CAMEL.test(c.name) || (number && NUMBER_NAME.test(c.name));
       const yearish = number && nums.every((n) => Number.isInteger(n) && n >= 1800 && n <= 2100) && /year|season/i.test(c.name);
+      // Whole numbers that are all different and long (account numbers, card
+      // numbers) are identifiers, whatever they're called: adding them up means nothing.
+      const idLike = number && nums.length >= 20 && distinct >= 0.95 * vals.length && !MEASURE_NAME.test(c.name) &&
+        nums.every((n) => Number.isInteger(n) && Math.abs(n) >= 1e5);
       let role;
       if (vals.length && distinct <= 1) role = 'constant';
       else if (date) role = META_NAME.test(c.name) || (vals.length >= 30 && distinct <= 3) ? 'meta' : 'date';
       else if (geo) role = 'geo';
-      else if (pk || codeName) role = 'code';
+      else if (pk || codeName || idLike) role = 'code';
       else if (META_NAME.test(c.name)) role = 'meta';
       else if (yearish) role = 'category';
       else if (number) role = 'measure';
@@ -197,7 +203,11 @@
     switch (m.fn) {
       case 'count': return cond ? `SUM(CASE WHEN ${cond} THEN 1 ELSE 0 END)` : 'COUNT(*)';
       case 'distinct': return `COUNT(DISTINCT ${only(c)})`;
-      case 'sum': case 'avg': case 'min': case 'max': return `${m.fn.toUpperCase()}(${only(c)})`;
+      // Added up as decimals: SUM of big whole numbers overflows ("integer
+      // overflow"). Still NULL when there's nothing to add up. `cond` must
+      // appear once, since it may hold ? placeholders.
+      case 'sum': return `SUM(CAST(${only(c)} AS REAL))`;
+      case 'avg': case 'min': case 'max': return `${m.fn.toUpperCase()}(${only(c)})`;
       default: throw new Error(`Unknown figure “${m.fn}”`);
     }
   }
@@ -291,12 +301,61 @@
     }
     const d = dayExpr(dcol, kind);
     const conds = controlConds(p, controls, prof, wp, { today: opts.today });
+    if (opts.latest !== undefined) {
+      // The latest day was looked up already (latestQuery): read the rows once.
+      if (!opts.latest) return { sql: `SELECT ${measureSql(m)} FROM (${base.sql})${whereSql(conds)}`, params: [...base.params, ...wp], compare: null };
+      const recent = `${d} > date(?, '-1 year')`;
+      const before = `${d} > date(?, '-2 years') AND ${d} <= date(?, '-1 year')`;
+      return {
+        sql: `SELECT ${measureSql(m)}, ${measureSql(m, recent)}, ${measureSql(m, before)} FROM (${base.sql})${whereSql(conds)}`,
+        params: [opts.latest, opts.latest, opts.latest, ...base.params, ...wp], compare: 'latest',
+      };
+    }
     const recent = `${d} > date("__dbx_latest", '-1 year')`;
     const before = `${d} > date("__dbx_latest", '-2 years') AND ${d} <= date("__dbx_latest", '-1 year')`;
     return {
       sql: `SELECT ${measureSql(m)}, ${measureSql(m, recent)}, ${measureSql(m, before)} FROM (${base.sql})` +
         ` CROSS JOIN (SELECT MIN(MAX(${d}), date('now')) AS "__dbx_latest" FROM (${base.sql})${whereSql(conds)})${whereSql(conds)}`,
       params: [...base.params, ...base.params, ...wp, ...wp], compare: 'latest',
+    };
+  }
+
+  // The latest day in the data (or today, if the data runs into the future),
+  // for "last 12 months vs the 12 before". Takes MAX of the column itself, so
+  // an index on it answers straight away; shared by every figure on the table.
+  function latestQuery(p, base, prof, controls, opts) {
+    const dcol = firstDate(prof);
+    if (!dcol) return null;
+    const kind = prof.cols[dcol].date;
+    const m = '"__dbx_max"';
+    const day = kind === 'unix' ? `date(${m}, 'unixepoch')` : kind === 'unixms' ? `date(${m} / 1000, 'unixepoch')` : `substr(${m}, 1, 10)`;
+    const wp = [];
+    const conds = controlConds(p, controls, prof, wp, { today: opts.today });
+    // A bare MAX(column) inside, so SQLite can read it off an index.
+    return {
+      sql: `SELECT MIN(${day}, date('now')) FROM (SELECT MAX(${qi(dcol)}) AS ${m} FROM (${base.sql})${whereSql(conds)})`,
+      params: [...base.params, ...wp],
+    };
+  }
+
+  // ---------- quick estimates ----------
+  // A big table is first drawn from about 2% of its rows: 40 evenly spaced
+  // runs of rowids, which SQLite reads straight off the table's b-tree without
+  // touching the rest (50x faster, typically within a few %). Counts and totals
+  // are scaled up by `factor`. The same blocks every time, so a panel's
+  // estimate is cached like any other query.
+  const SAMPLE_BLOCKS = 40;
+  function sampleSource(table, cols, maxRowid) {
+    const size = Math.max(250, Math.ceil((maxRowid * 0.02) / SAMPLE_BLOCKS));
+    if (!(maxRowid > SAMPLE_BLOCKS * size * 4)) return null; // not worth it: read the lot
+    const ranges = [];
+    for (let i = 0; i < SAMPLE_BLOCKS; i++) {
+      const start = Math.max(1, Math.floor(((i + 0.5) * maxRowid) / SAMPLE_BLOCKS - size / 2));
+      ranges.push(`rowid BETWEEN ${start} AND ${start + size - 1}`);
+    }
+    return {
+      sql: `SELECT ${cols.map((c) => qi(c.name)).join(', ')} FROM ${qi(table)} WHERE ${ranges.join(' OR ')}`,
+      params: [], cols, factor: maxRowid / (SAMPLE_BLOCKS * size),
     };
   }
 
@@ -369,10 +428,14 @@
     const t = schema.tables[parent.table];
     const single = parent.table.toLowerCase().replace(/(ies)$/, 'y').replace(/s$/, '');
     const text = t.columns.filter((c) => c.name !== parent.column && c.affinity === 'TEXT');
-    const label = text.find((c) => LABEL_NAME.test(c.name)) || text.find((c) => c.name.toLowerCase() === single) ||
-      text.find((c) => /name|title/i.test(c.name)) || text[0];
+    const named = text.find((c) => LABEL_NAME.test(c.name)) || text.find((c) => c.name.toLowerCase() === single) ||
+      text.find((c) => /name|title/i.test(c.name));
+    const label = named || text[0];
     const extra = text.find((c) => c !== label && /^(city|town|country|region|state|place|location)$/i.test(c.name));
-    return label ? { table: parent.table, key: parent.column, label: label.name, extra: extra && extra.name } : null;
+    // `named`: the other table has a real name column, so these ids make a
+    // good thing to group by (orders by customer); not so if the best it has
+    // is, say, a date (order_items by order).
+    return label ? { table: parent.table, key: parent.column, label: label.name, extra: extra && extra.name, named: !!named } : null;
   }
   function namesQuery(link, keys) {
     return {
@@ -458,7 +521,9 @@
         h('div', { class: 'tool-group' }, h('span', { class: 'tool-label' }, 'Dashboard'), nameBox),
         h('div', { class: 'tool-group' }, h('span', { class: 'tool-label' }, 'Controls'), controlsBox,
           h('button', { class: 'ghost small', title: 'Filter every panel that has a column', onclick: (e) => addControlMenu(e.currentTarget) }, '+ Add control')),
-        h('span', { class: 'spacer' }), statusBox, layoutBtn,
+        h('span', { class: 'spacer' }), statusBox,
+        h('button', { class: 'tool', title: 'Save this dashboard as a PDF (or print it)', onclick: () => exportPdf() }, 'Export PDF'),
+        layoutBtn,
         h('button', { class: 'primary', onclick: () => openAdd() }, 'Add panel')),
       h('div', { class: 'dash-body' }, scroller, drawer));
     const tip = h('div', { class: 'dash-tip', hidden: true });
@@ -489,6 +554,7 @@
       profiles.clear();
       known.clear();
       ideasCache = null;
+      viewIdeasCache = null;
       closeDrawer();
       state = null;
       let data = null;
@@ -545,11 +611,21 @@
     let gen = 0;
     let epoch = 0; // bumps when another database is opened
 
-    function run(q, limit) {
+    // opts.first: jump the queue (quick estimates, so every panel shows
+    // something before any panel's slow exact query starts).
+    // opts.timeout: give up after this many ms (CancelledError 'timeout').
+    function run(q, limit, opts = {}) {
       const k = q.sql + '\u0000' + JSON.stringify(q.params);
       if (results.has(k)) return Promise.resolve(results.get(k));
       if (inflight.has(k)) return inflight.get(k);
-      const pr = new Promise((resolve, reject) => { queue.push({ q, limit: limit || 1000, resolve, reject, gen }); pump(); })
+      const pr = new Promise((resolve, reject) => {
+        const job = { q, limit: limit || 1000, resolve, reject, gen, first: !!opts.first, timeout: opts.timeout };
+        if (job.first) {
+          const at = queue.findIndex((j) => !j.first);
+          queue.splice(at < 0 ? queue.length : at, 0, job);
+        } else queue.push(job);
+        pump();
+      })
         .then((r) => {
           results.set(k, r);
           if (results.size > 300) results.delete(results.keys().next().value);
@@ -567,8 +643,12 @@
         running.add(job);
         job.lane = lane;
         job.dbId = ctx.db() && ctx.db().id;
+        let timedOut = false;
+        const timer = job.timeout && setTimeout(() => { timedOut = true; ctx.api('cancel', { id: job.dbId, keys: [lane] }).catch(() => {}); }, job.timeout);
         // Through a promise, so even an error thrown straight away frees the lane.
-        Promise.resolve().then(() => ctx.query(job.q.sql, job.q.params, lane, job.limit)).then(job.resolve, job.reject).finally(() => {
+        Promise.resolve().then(() => ctx.query(job.q.sql, job.q.params, lane, job.limit))
+          .then(job.resolve, (e) => job.reject(timedOut ? new ctx.CancelledError('timeout') : e)).finally(() => {
+          clearTimeout(timer);
           if (mine !== epoch) return; // from the database that was open before
           running.delete(job);
           free.push(lane);
@@ -593,7 +673,9 @@
     }
     function showStatus() {
       const n = queue.length + running.size;
-      if (n) {
+      if (printNote) {
+        statusBox.replaceChildren(h('span', { class: 'muted' }, printNote), ' ', h('button', { class: 'link small', onclick: stopAll }, 'Stop'));
+      } else if (n) {
         statusBox.replaceChildren(h('span', { class: 'muted' }, `Loading ${n} quer${n === 1 ? 'y' : 'ies'}… `),
           h('button', { class: 'link small', onclick: stopAll }, 'Stop'));
       } else statusBox.replaceChildren(h('span', { class: 'muted', title: savedWhere }, savedWhere));
@@ -611,7 +693,9 @@
     }
     const profiles = new Map();
     const known = new Map(); // the same, once they've arrived
-    function profile(src) {
+    // opts.timeout: for suggestions, give up on a view that takes too long to
+    // produce its first rows (a view that adds up millions of rows runs in full).
+    function profile(src, opts = {}) {
       const k = srcKey(src);
       if (!profiles.has(k)) {
         const pr = (async () => {
@@ -622,18 +706,27 @@
           let rows = null, total = null;
           if (t && t.type === 'table') {
             try {
-              total = num((await run({ sql: `SELECT MAX(rowid) FROM ${qi(src.table)}`, params: [] }, 1)).rows[0][0]);
+              total = num((await run({ sql: `SELECT MAX(rowid) FROM ${qi(src.table)}`, params: [] }, 1, { first: true })).rows[0][0]);
               if (total > 600) {
                 const ids = new Set();
                 while (ids.size < 400) ids.add(1 + Math.floor(Math.random() * total));
-                const r = await run({ sql: `SELECT * FROM ${qi(src.table)} WHERE rowid IN (${[...ids].join(',')})`, params: [] }, 400);
+                const r = await run({ sql: `SELECT * FROM ${qi(src.table)} WHERE rowid IN (${[...ids].join(',')})`, params: [] }, 400, { first: true });
                 if (r.rows.length >= 100 && r.columns.length === b.cols.length) rows = r.rows;
               }
             } catch (_) { /* a WITHOUT ROWID table: take the first rows instead */ }
           }
-          if (!rows) rows = (await run({ sql: `SELECT * FROM (${b.sql}) LIMIT 400`, params: b.params }, 400)).rows;
+          if (!rows) rows = (await run({ sql: `SELECT * FROM (${b.sql}) LIMIT 400`, params: b.params }, 400, { first: true, timeout: opts.timeout })).rows;
           const prof = classify(b.cols, rows, ctx.isPk);
           prof.total = total || rows.length;
+          prof.maxRowid = total; // only for real tables: what the quick-estimate sampler needs
+          prof.table = t && t.type === 'table' ? t.name : null;
+          prof.links = {}; // column -> the table and name column its ids stand for
+          for (const c of b.cols) {
+            const pc = prof.cols[c.name];
+            if (!pc || pc.pk || pc.role !== 'code') continue;
+            const link = nameLink(c, ctx.schema());
+            if (link) prof.links[c.name] = link;
+          }
           known.set(k, prof);
           return prof;
         })();
@@ -645,22 +738,45 @@
     const isMoney = (prof, m) => m.fn !== 'count' && m.fn !== 'distinct' && !!prof.cols[m.col] &&
       (prof.cols[m.col].decimal || MONEY_NAME.test(m.col));
 
-    async function fetchPanel(p) {
+    // Can this panel be drawn from a sample first? Only a big real table, and
+    // only figures that scale (a count of different values doesn't).
+    const ESTIMATE_ROWS = 200000;
+    function sampleFor(p, prof) {
+      if (!p.source.table || !prof.table || !(prof.maxRowid >= ESTIMATE_ROWS)) return null;
+      if (p.type === 'map' || p.type === 'calendar' || p.measures.some((m) => m.fn === 'distinct')) return null;
+      // The top few of thousands of customers can't be picked out from 2% of
+      // the rows (each has only a handful in the sample): only estimate
+      // groups that each have plenty of rows, like dates and categories.
+      const by = p.by && prof.cols[p.by];
+      if (by && !by.date && by.distinct > 50) return null;
+      return sampleSource(prof.table, compileSource(p.source).cols, prof.maxRowid);
+    }
+
+    // est: from sampleFor, to read the sample and scale counts and totals up.
+    async function fetchPanel(p, est) {
       const prof = await profile(p.source);
-      const base = compileSource(p.source);
+      const base = est || compileSource(p.source);
       for (const m of p.measures) if (m.fn !== 'count' && !prof.cols[m.col]) throw new Error(`There's no column “${m.col}” in this panel's data any more`);
       const controls = D().controls;
       const opts = { today: today() };
-      const out = { prof, money: p.measures.map((m) => isMoney(prof, m)) };
+      const out = { prof, money: p.measures.map((m) => isMoney(prof, m)), estimate: !!est };
+      const f = est ? est.factor : 1;
+      const scale = (v, m) => (f !== 1 && v != null && (m.fn === 'count' || m.fn === 'sum') ? num(v) * f : num(v));
+      const go = (q, limit) => run(q, limit, { first: !!est });
       if (p.type === 'number') {
+        const m = p.measures[0];
+        if (p.compare) {
+          const lq = latestQuery(p, base, prof, controls, opts);
+          if (lq) opts.latest = (await go(lq, 1)).rows[0][0] || null;
+        }
         const q = numberQuery(p, base, prof, controls, opts);
-        const r = await run(q, 1);
+        const r = await go(q, 1);
         const row = r.rows[0] || [];
-        out.value = row[0];
-        if (q.compare === 'range') out.delta = { cur: row[0], prev: row[1], label: 'vs the period before' };
-        if (q.compare === 'latest') out.delta = { cur: row[1], prev: row[2], label: 'last 12 months vs the 12 before' };
+        out.value = scale(row[0], m);
+        if (q.compare === 'range') out.delta = { cur: scale(row[0], m), prev: scale(row[1], m), kind: 'range' };
+        if (q.compare === 'latest') out.delta = { cur: scale(row[1], m), prev: scale(row[2], m), kind: 'latest' };
         const sq = p.spark ? sparkQuery(p, base, prof, controls, opts) : null;
-        if (sq) out.spark = (await run(sq, 600)).rows.map((x) => Number(x[1]) || 0);
+        if (sq) out.spark = (await go(sq, 600)).rows.map((x) => Number(scale(x[1], m)) || 0);
         return out;
       }
       if (p.type === 'map') {
@@ -672,19 +788,19 @@
       if (p.type === 'calendar') {
         if (!prof.cols[p.by] || !prof.cols[p.by].date) throw new Error(`“${p.by}” doesn't look like a date column`);
         let month = pst(p.id).month || p.month;
-        if (!month) month = (await run(latestMonthQuery(p, base, prof, controls, opts), 1)).rows[0][0] || today().slice(0, 7);
+        if (!month) month = (await go(latestMonthQuery(p, base, prof, controls, opts), 1)).rows[0][0] || today().slice(0, 7);
         pst(p.id).month = month;
         opts.month = [month + '-01', monthEnd(month)];
         out.month = month;
       }
       const q = groupQuery(p, base, prof, controls, opts);
       const needTotal = p.showPct || p.other || p.type === 'mix';
-      const [r, t] = await Promise.all([run(q, q.limit + 1), needTotal ? run(totalQuery(p, base, prof, controls, opts), 1) : null]);
+      const [r, t] = await Promise.all([go(q, q.limit + 1), needTotal ? go(totalQuery(p, base, prof, controls, opts), 1) : null]);
       out.bucket = q.bucket;
       out.more = r.rows.length > q.limit;
-      out.groups = r.rows.slice(0, q.limit).map((row) => ({ key: row[0], label: label(row[0], q.bucket), values: row.slice(1).map(num) }));
-      out.total = t ? t.rows[0].map(num) : null;
-      await addNames(p, base, out);
+      out.groups = r.rows.slice(0, q.limit).map((row) => ({ key: row[0], label: label(row[0], q.bucket), values: row.slice(1).map((v, i) => scale(v, p.measures[i])) }));
+      out.total = t ? t.rows[0].map((v, i) => scale(v, p.measures[i])) : null;
+      await addNames(p, base, out, go);
       if (p.other && out.more && out.total && ['count', 'sum'].includes(p.measures[0].fn)) {
         const shownSum = (i) => out.groups.reduce((n, g) => n + (g.values[i] || 0), 0);
         out.groups.push({ key: undefined, other: true, label: 'Other', values: p.measures.map((m, i) => (['count', 'sum'].includes(m.fn) ? out.total[i] - shownSum(i) : null)) });
@@ -694,13 +810,13 @@
     }
     // Show the names behind ids (venue_id 12 -> "O2 Arena"): one small lookup
     // for just the ids on show. Repeated names keep their id, to tell them apart.
-    async function addNames(p, base, out) {
+    async function addNames(p, base, out, go = run) {
       if (out.bucket || p.names === false) return;
       const link = labelLink(p) || nameLink(base.cols.find((c) => c.name === p.by), ctx.schema());
       out.link = link;
       const keys = out.groups.filter((g) => !g.other && g.key != null).map((g) => g.key);
       if (!link || !keys.length) return;
-      const r = await run(namesQuery(link, keys), keys.length);
+      const r = await go(namesQuery(link, keys), keys.length);
       const names = new Map(r.rows.map(([k, v, x]) => [JSON.stringify(k), [v, x]]));
       const seen = new Map();
       for (const [v] of names.values()) seen.set(v, (seen.get(v) || 0) + 1);
@@ -822,10 +938,15 @@
       }
       const dl = data.delta;
       const pct = dl && dl.prev ? (num(dl.cur) - num(dl.prev)) / Math.abs(num(dl.prev)) * 100 : null;
+      // Say what's being compared: with no date range chosen the big figure is
+      // everything, while the change is about the latest 12 months only.
+      const change = pct == null ? null : dl.kind === 'latest'
+        ? [h('span', null, `${fmtV(num(dl.cur), p, data, 0, true)} in the last 12 months, `), (pct >= 0 ? '+' : '') + pct.toFixed(1) + '%', h('span', null, ' on the 12 before')]
+        : [(pct >= 0 ? '+' : '') + pct.toFixed(1) + '% ', h('span', null, 'vs the period before')];
       put(body, h('div', { class: 'num' },
-        h('div', { class: 'num-row' }, h('div', { class: 'num-value' }, fmtV(num(data.value), p, data, 0, w < 200)), spark),
+        h('div', { class: 'num-row' }, h('div', { class: 'num-value' }, (data.estimate ? '≈ ' : '') + fmtV(num(data.value), p, data, 0, w < 200)), spark),
         h('div', { class: 'num-cap' }, p.note || mLabel(p.measures[0])),
-        pct != null ? h('div', { class: 'delta ' + (pct >= 0 ? 'up' : 'down') }, (pct >= 0 ? '+' : '') + pct.toFixed(1) + '% ', h('span', null, dl.label)) : null));
+        change ? h('div', { class: 'delta ' + (pct >= 0 ? 'up' : 'down'), title: dl.kind === 'latest' ? `Using ${firstDate(data.prof)}. Choose a date range with a control to compare that instead.` : null }, change) : null));
     }
 
     function drawBars(p, body, data) {
@@ -1287,32 +1408,79 @@
       ps.dirty = false;
       const body = el.querySelector('.panel-body');
       const seq = ++ps.seq;
+      let resolveDone;
+      ps.done = new Promise((r) => { resolveDone = r; }); // for the PDF export, which waits for every panel
       const slow = setTimeout(() => el.classList.add('loading'), 120);
       const started = performance.now();
-      const clock = setInterval(() => {
-        const secs = Math.round((performance.now() - started) / 1000);
-        if (secs < 3 || seq !== ps.seq) return;
+      let estimated = false;
+      const wait = () => {
         let w = el.querySelector('.panel-wait');
         if (!w) { w = h('span', { class: 'panel-wait' }); el.querySelector('.panel-actions').before(w); }
-        w.textContent = `reading… ${secs}s`;
-        if (secs >= 10) w.title = slowHint(p);
+        return w;
+      };
+      const clock = setInterval(() => {
+        const secs = Math.round((performance.now() - started) / 1000);
+        if (seq !== ps.seq || (secs < 3 && !estimated)) return;
+        const w = wait();
+        const prof = known.get(srcKey(p.source));
+        const rows = prof && prof.maxRowid ? ` ${fmt(prof.maxRowid)} rows` : '';
+        w.textContent = (estimated ? '≈ estimate · ' : '') + (secs >= 3 ? `reading all${rows}… ${secs}s` : 'exact figures loading…');
+        w.title = (estimated ? 'Drawn from about 2% of the rows so it appears straight away; the exact figures replace it when ready.\n\n' : '') + slowHint(p);
       }, 1000);
       try {
+        // A big table: a quick estimate from a sample first.
+        const prof = await profile(p.source);
+        const est = sampleFor(p, prof);
+        if (est) {
+          try {
+            const data = await fetchPanel(p, est);
+            if (seq !== ps.seq) return;
+            ps.data = data;
+            estimated = true;
+            clearTimeout(slow); // or it would dim the estimate that's just been drawn
+            el.classList.remove('loading');
+            el.classList.add('estimate');
+            wait().textContent = '≈ estimate · exact figures loading…';
+            draw(p, body);
+          } catch (e) {
+            if (e instanceof ctx.CancelledError) throw e;
+            // Any other problem: skip the estimate and just read everything.
+          }
+        }
         const data = await fetchPanel(p);
         if (seq !== ps.seq) return;
         ps.data = data;
         draw(p, body);
       } catch (e) {
         if (seq !== ps.seq) return;
-        ps.data = null;
         if (e instanceof ctx.CancelledError) {
-          if (e.message !== 'dropped') put(body, note('Stopped. '), h('button', { class: 'link small', onclick: () => loadPanel(p) }, 'Load again'));
-        } else put(body, h('p', { class: 'error small' }, e.message));
+          // An estimate on screen stays, marked as one.
+          if (estimated) wait().textContent = '≈ estimate (stopped)';
+          else {
+            ps.data = null;
+            if (e.message !== 'dropped') put(body, note('Stopped. '), h('button', { class: 'link small', onclick: () => loadPanel(p) }, 'Load again'));
+          }
+        } else {
+          ps.data = null;
+          estimated = false;
+          put(body, h('p', { class: 'error small' }, friendlyError(e.message)));
+        }
       } finally {
         clearTimeout(slow);
         clearInterval(clock);
-        if (seq === ps.seq) { el.classList.remove('loading'); el.querySelector('.panel-wait')?.remove(); }
+        if (seq === ps.seq) {
+          el.classList.remove('loading');
+          if (!estimated || (ps.data && !ps.data.estimate)) { el.classList.remove('estimate'); el.querySelector('.panel-wait')?.remove(); }
+        }
+        resolveDone();
       }
+    }
+
+    // SQLite's wording, put plainly where it's likely to come up.
+    function friendlyError(msg) {
+      if (/integer overflow/i.test(msg)) return 'The numbers are too big to add up exactly. Try Average, or a different column.';
+      if (/interrupted/i.test(msg)) return 'Stopped.';
+      return msg;
     }
 
     // Why a panel is slow: grouping or filtering on a column with no index
@@ -1551,12 +1719,19 @@
       const load = async (text) => {
         const my = ++seq;
         try {
-          const r = await run(valuesQuery(base, c.col, text, link), 201);
+          // Its own connection, not the panels' shared ones: each search stops
+          // the one before (the server interrupts a connection's running query
+          // when it's given a new one), so typing never queues full-table reads.
+          const vq = valuesQuery(base, c.col, text, link);
+          const r = await ctx.query(vq.sql, vq.params, 'dashvalues', 201);
           if (my !== seq) return;
           const rows = r.rows.slice(0, 200);
           const names = new Map();
           const keys = rows.map(([v]) => v).filter((v) => v != null);
-          if (link && keys.length) (await run(namesQuery(link, keys), keys.length)).rows.forEach(([k, n]) => names.set(JSON.stringify(k), n));
+          if (link && keys.length) {
+            const nq = namesQuery(link, keys);
+            (await ctx.query(nq.sql, nq.params, 'dashvalues', keys.length)).rows.forEach(([k, n]) => names.set(JSON.stringify(k), n));
+          }
           if (my !== seq) return;
           const show = (v) => { const n = names.get(JSON.stringify(v)); return n != null && n !== '' ? String(n) : label(v); };
           list.replaceChildren(
@@ -1620,39 +1795,58 @@
     // fast: a name without an index is grouped by an indexed copy of it
     // (headliner by headliner_key) and labelled from the readable one.
     const BIG = 300000;
+    const singular = (w) => String(w).replace(/ies$/i, 'y').replace(/(ss|us)$/i, '$1').replace(/s$/i, '');
     function ideasFor(table, prof) {
       const cols = prof.names.map((n) => prof.cols[n]);
       const t = ctx.schema().tables[table];
       const big = (prof.total || 0) > BIG;
       const idx = new Set((t && t.indexed) || []);
-      const fast = (c) => {
-        if (!big) return true;
-        if (idx.has(c.name)) return true;
+      // Every column is fair game however big the table: quick estimates draw
+      // it straight away. On a big table a name is still grouped by an indexed
+      // copy of it when there is one (headliner by headliner_key), labelled
+      // from the readable one.
+      for (const c of cols) {
+        if (!big || idx.has(c.name)) continue;
         const twin = cols.find((o) => o.twinOf === c.name && idx.has(o.name));
-        if (twin) { c.via = twin.name; return true; }
-        return false;
-      };
+        if (twin) c.via = twin.name;
+      }
+      // Ids that stand for something with a name (customer_id -> customers.name)
+      // are grouped by and shown as those names: often the best dimensions a
+      // table has. Titled after the table they point to ("by customer").
+      const linked = cols.filter((c) => c.role === 'code' && !c.pk && !c.sparse && prof.links[c.name] && prof.links[c.name].named)
+        .map((c) => ({ ...c, title: singular(prof.links[c.name].table), linkTo: prof.links[c.name].table }));
+      // A table's own name column (customers.name) is one row per thing, so
+      // "top names" by number of rows means nothing; likewise any text where
+      // nearly every value is different.
+      const ownLabel = (c) => t && t.columns.some((x) => x.pk) && (LABEL_NAME.test(c.name) || c.name.toLowerCase() === singular(table).toLowerCase());
+      const repeats = (c) => c.sampled < 20 || c.distinct < 0.8 * c.sampled;
       // Names: things first (headliners, venues, products), then places.
       // Categories: the fullest first.
-      const weight = (c) => (ENTITY_NAME.test(c.name) ? 2 : PLACE_NAME.test(c.name) ? 1 : DIM_NAME.test(c.name) ? 0.5 : 0) + c.filled;
+      const weight = (c) => {
+        const n = c.linkTo || c.name;
+        return (ENTITY_NAME.test(n) ? 2 : PLACE_NAME.test(n) ? 1 : DIM_NAME.test(n) ? 0.5 : 0) + c.filled;
+      };
       const best = (list) => list.sort((a, b) => weight(b) - weight(a));
-      const dates = cols.filter((c) => c.role === 'date' && c.filled >= 0.5 && fast(c));
-      const cats = cols.filter((c) => c.role === 'category' && !c.sparse && fast(c))
-        .sort((a, b) => (b.filled * 2 + (DIM_NAME.test(b.name) ? 0.5 : 0)) - (a.filled * 2 + (DIM_NAME.test(a.name) ? 0.5 : 0)));
-      const names = best(cols.filter((c) => c.role === 'name' && !c.sparse && fast(c)));
+      const dates = cols.filter((c) => c.role === 'date' && c.filled >= 0.5);
+      const cats = [...cols.filter((c) => c.role === 'category' && !c.sparse), ...linked.filter((c) => c.distinct <= 30)]
+        .sort((a, b) => (b.filled * 2 + (DIM_NAME.test(b.linkTo || b.name) ? 0.5 : 0)) - (a.filled * 2 + (DIM_NAME.test(a.linkTo || a.name) ? 0.5 : 0)));
+      const names = best([...cols.filter((c) => c.role === 'name' && !c.sparse && repeats(c) && !ownLabel(c)), ...linked.filter((c) => c.distinct > 30)]);
       const place = cols.find((c) => c.role === 'name' && PLACE_NAME.test(c.name) && /city|town/i.test(c.name));
-      const measures = big ? [] : cols.filter((c) => c.role === 'measure' && c.filled >= 0.05 &&
+      const measures = cols.filter((c) => c.role === 'measure' && c.filled >= 0.05 &&
           !(/^(avg|average|mean)_/i.test(c.name) && prof.cols[c.name.replace(/^(avg|average|mean)_/i, 'total_')]))
         .sort((a, b) => ((FLOW_NAME.test(b.name) ? 3 : MEASURE_NAME.test(b.name) ? 1 : 0) + b.filled) -
           ((FLOW_NAME.test(a.name) ? 3 : MEASURE_NAME.test(a.name) ? 1 : 0) + a.filled));
       const lat = cols.find((c) => c.geo === 'lat'), lon = cols.find((c) => c.geo === 'lon');
       // The subject of a database is nearly always its biggest table with dates
-      // and things to group by, so size leads and richness breaks near-ties.
-      // Richness counts every useful column, fast or not.
-      const count = (role) => cols.filter((c) => c.role === role && !c.sparse).length;
-      const rich = (cols.some((c) => c.role === 'date') ? 2 : 0) + Math.min(count('category') + count('name'), 4) +
-        Math.min(cols.filter((c) => c.role === 'measure' && c.filled >= 0.05).length, 2) + (lat && lon ? 1 : 0);
-      const score = (rich >= 4 ? Math.log10(Math.max(1, prof.total || 1)) * 2 : 0) + rich;
+      // and things to group by (often ids pointing at other tables: orders ->
+      // customers), so size leads and richness breaks near-ties. A table with
+      // no dates makes a thin dashboard (no trend), so its size counts for less.
+      // Views run their whole query for every panel, so they rank lower.
+      const hasDate = dates.length > 0;
+      const rich = (hasDate ? 3 : 0) + Math.min(cats.length + names.length, 4) + Math.min(measures.length, 2) +
+        (lat && lon ? 1 : 0) + Math.min(linked.length, 2);
+      const size = Math.log10(Math.max(1, prof.total || 1)) * (hasDate ? 2 : 1);
+      const score = (rich >= 3 ? size : 0) + rich - (t && t.type === 'view' ? 3 : 0);
       // A huge table's own map would read every row; a smaller table with
       // coordinates (venues) can stand in for it.
       const geo = lat && lon ? [lat, lon] : null;
@@ -1663,7 +1857,7 @@
     function panelsFor(I) {
       const src = { table: I.table };
       const noun = human(plural(I.table));
-      const lower = (c) => human(c.name).toLowerCase();
+      const lower = (c) => human(c.title || c.name).toLowerCase();
       // Grouped by the column itself, or by its indexed copy with names from it.
       const byCol = (c) => (c.via ? { by: c.via, labelFrom: c.name, labelExtra: /venue|arena|stadium|club/i.test(c.name) && I.place ? I.place.name : null } : { by: c.name });
       const m = I.measures.find((x) => x.filled >= 0.3);
@@ -1671,7 +1865,7 @@
       const out = { kpis: [], line: null, mixes: [], bars: [], tops: [], table: null, map: null };
       out.kpis.push(panel({ title: noun, type: 'number', source: src, note: `rows in ${I.table}` }));
       for (const c of I.names.slice(0, 2)) {
-        out.kpis.push(panel({ title: `Different ${plural(lower(c))}`, type: 'number', source: src, measures: [{ fn: 'distinct', col: c.via || c.name }], spark: false, compare: !I.big, note: `in ${I.table}` }));
+        out.kpis.push(panel({ title: `Different ${plural(lower(c))}`, type: 'number', source: src, measures: [{ fn: 'distinct', col: c.via || c.name }], spark: false, compare: false, note: `in ${I.table}` }));
       }
       if (m) out.kpis.push(panel({ title: human(m.name), type: 'number', source: src, measures: [figureFor(m)], format: currencyOf(m.name), note: known(m) }));
       const d = I.dates[0];
@@ -1701,19 +1895,16 @@
       return out;
     }
 
-    let ideasCache = null;
-    async function allIdeas() {
-      if (ideasCache) return ideasCache;
-      const tables = Object.values(ctx.schema().tables).filter((t) => t.type === 'table' || t.type === 'view').slice(0, 40);
-      const out = [];
-      for (const t of tables) {
-        try {
-          const prof = await profile({ table: t.name });
-          if (prof.rows >= 20) out.push(ideasFor(t.name, prof));
-        } catch (_) { /* a view that fails, say */ }
-      }
-      ideasCache = out.sort((a, b) => b.score - a.score);
-      return ideasCache;
+    // Tables all at once (the three connections share them out). Views only
+    // when asked: a view that adds up millions of rows has to run in full to
+    // give even its first rows, so one that takes over 3s is skipped.
+    let ideasCache = null, viewIdeasCache = null;
+    const lookAt = (t, opts) => profile({ table: t.name }, opts).then((prof) => (prof.rows >= 20 ? ideasFor(t.name, prof) : null)).catch(() => null);
+    async function allIdeas(withViews = true) {
+      const all = Object.values(ctx.schema().tables);
+      if (!ideasCache) ideasCache = (await Promise.all(all.filter((t) => t.type === 'table').slice(0, 40).map((t) => lookAt(t)))).filter(Boolean);
+      if (withViews && !viewIdeasCache) viewIdeasCache = (await Promise.all(all.filter((t) => t.type === 'view').slice(0, 10).map((t) => lookAt(t, { timeout: 3000 })))).filter(Boolean);
+      return [...ideasCache, ...(withViews ? viewIdeasCache : [])].sort((a, b) => b.score - a.score);
     }
 
     // Everything worth adding, the best table first.
@@ -1750,11 +1941,20 @@
     async function starterPanels() {
       stopAll(); // whatever the old panels were reading
       statusBox.replaceChildren(h('span', { class: 'muted' }, 'Looking at the tables…'));
-      const [I] = await allIdeas();
+      // Tables first; views only if no table has dates (they're slow to read).
+      let all = await allIdeas(false);
+      if (!all.length || !all[0].dates.length) all = await allIdeas(true);
+      const [I] = all;
       if (!I) { showStatus(); return ctx.toast('Couldn’t find a table to build a dashboard from. Add panels one at a time.'); }
       const g = panelsFor(I);
+      // A narrow main table (orders: a date, a status and a customer) leaves
+      // gaps; fill them from the next best tables (top products from the
+      // order lines, customers by region).
+      const extras = all.filter((x) => x !== I && x.score >= 5).flatMap((x) => {
+        const gx = panelsFor(x);
+        return [gx.table, ...gx.tops, ...gx.mixes, ...gx.bars].filter(Boolean).slice(0, 2);
+      });
       if (!g.map) {
-        const all = await allIdeas();
         // Prefer a table that counts this one's rows (venues.events), then the biggest.
         const weightIn = (x) => x.prof.names.map((n) => x.prof.cols[n]).find((c) => c.role === 'measure' && c.name.toLowerCase() === I.table.toLowerCase());
         const J = all.filter((x) => x !== I && x.geo && (x.prof.total || 0) < 2e6).sort((a, b) => (weightIn(b) ? 1 : 0) - (weightIn(a) ? 1 : 0))[0];
@@ -1774,8 +1974,9 @@
       const rows = [
         kpis,
         [sized(g.line, 8, 5), sized(side, 4, 5)],
-        [sized(g.tops[0], 4, 6), sized(g.table || g.tops[1], g.table ? 5 : 4, 6), sized(rest.shift() || g.tops[2], 3, 6)],
-        [sized(g.map, 8, 7), sized(rest.shift() || g.tops[2], 4, 7)],
+        [sized(g.tops[0] || extras.shift(), 4, 6), sized(g.table || g.tops[1] || extras.shift(), g.table ? 5 : 4, 6), sized(rest.shift() || g.tops[2] || extras.shift(), 3, 6)],
+        [sized(g.map, 8, 7), sized(rest.shift() || g.tops[3] || extras.shift(), 4, 7)],
+        g.map ? [] : [sized(rest.shift() || extras.shift(), 6, 6), sized(rest.shift() || extras.shift(), 6, 6)],
       ];
       const pick = pack(rows);
       const d = D();
@@ -2004,6 +2205,69 @@
       return p;
     }
 
+    // ---------- PDF ----------
+    // The browser's own print-to-PDF, with the page laid out for it: panels
+    // redrawn at the width of an A4 landscape page, every panel loaded with
+    // its exact figures (not just the ones scrolled into view), and a heading
+    // saying what the dashboard shows and which controls were set.
+    const PRINT_WIDTH = 1040; // px: A4 landscape less 10mm margins, at 96 per inch
+    let printing = false;
+    let printNote = ''; // shown in place of the loading count while a PDF is prepared
+    async function exportPdf() {
+      const d = D();
+      if (!d.panels.length) return ctx.toast('Add some panels first.');
+      if (printing) return;
+      printing = true;
+      closeDrawer();
+      if (layoutMode) setLayout(false);
+      const set = d.controls.filter((c) => ('value' in c) || (c.kind === 'dates' && c.preset !== 'all'));
+      const head = h('div', { class: 'print-head' },
+        h('div', { class: 'print-title' }, d.name),
+        h('div', { class: 'print-meta' }, [ctx.db().name, `Exported ${new Date().toLocaleString(undefined, { dateStyle: 'long', timeStyle: 'short' })}`,
+          set.length ? 'Filtered: ' + set.map((c) => (c.kind === 'choice' ? `${c.col} = ${c.label || label(c.value)}` : `${c.col}: ${c.preset === 'custom' ? `${c.from || '…'} to ${c.to || '…'}` : PRESETS.find((x) => x[0] === c.preset)[1]}`)).join(', ') : 'No filters'].join(' · ')));
+      scroller.prepend(head);
+      document.body.classList.add('dash-print');
+      const oldTitle = document.title;
+      const restore = () => {
+        document.body.classList.remove('dash-print');
+        head.remove();
+        document.title = oldTitle;
+        printing = false;
+        printNote = '';
+        showStatus();
+      };
+      try {
+        // Every panel, including those below the fold, with exact figures.
+        const pending = () => d.panels.filter((p) => { const ps = pst(p.id); return ps.dirty || !ps.data || ps.data.estimate; });
+        for (const p of d.panels) {
+          const ps = pst(p.id);
+          ps.visible = true;
+          if (ps.dirty || !ps.data) loadPanel(p);
+        }
+        const waiting = pending();
+        if (waiting.length) {
+          printNote = `Preparing the PDF: loading ${waiting.length} panel${waiting.length === 1 ? '' : 's'}…`;
+          showStatus();
+          await Promise.all(waiting.map((p) => pst(p.id).done));
+          if (pending().length) {
+            // Stopped, or something failed: print what there is, but say so.
+            if (!confirm('Some panels haven’t finished loading. Export the PDF anyway?')) return restore();
+          }
+        }
+        // Let every panel redraw at the page width (the ResizeObserver does it).
+        // Two frames normally; a timer too, as a page that isn't being drawn gets no frames.
+        await new Promise((r) => { requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(r, 80))); setTimeout(r, 400); });
+        document.title = `${d.name} - ${today()}`; // the PDF's suggested file name
+        addEventListener('afterprint', restore, { once: true });
+        window.print();
+        // Some browsers don't send afterprint; print() has returned by now anyway.
+        setTimeout(() => { if (printing) { removeEventListener('afterprint', restore); restore(); } }, 500);
+      } catch (e) {
+        restore();
+        ctx.toast('Couldn’t make the PDF: ' + e.message, true);
+      }
+    }
+
     // ---------- showing and hiding ----------
     function renderAll() {
       if (!state) return;
@@ -2032,7 +2296,7 @@
   }
 
   return {
-    create, classify, keyExpr, dayExpr, rangeCond, measureSql, controlConds, groupQuery, totalQuery, numberQuery,
+    create, classify, keyExpr, dayExpr, rangeCond, measureSql, controlConds, groupQuery, totalQuery, numberQuery, latestQuery, sampleSource,
     sparkQuery, boundsQuery, binsQuery, valuesQuery, nameLink, namesQuery, presetRange, bucketLabel, bucketRange, addDays,
   };
 });

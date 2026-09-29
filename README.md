@@ -110,11 +110,16 @@ any database. Every panel can be edited.
   `venue|city` keys, copies like `city_norm` or `countryCode`, bookkeeping
   like `loaded_at` or `source`, and mostly-empty columns). It builds one
   dashboard about the database's main subject (its biggest table with dates
-  and things to group by) and lays it out to fill the screen. On a huge table
-  it only uses what an index makes fast: a chart of headliners groups by the
-  indexed `headliner_key` and shows the proper names from `headliner`, and the
-  map uses a smaller table with coordinates (venues, sized by their events).
-  Blanks never top a chart. *Add panel* lists more suggestions.
+  and things to group by, including ids that point at other tables, so
+  `orders` with a `customer_id` gets "Top customers") and lays it out to fill
+  the screen, topping up a narrow table with panels from related ones ("Order
+  items by product"). Long numbers that are all different (`account_number`)
+  count as ids, never as amounts, and a table's own name column isn't charted
+  as "top names". On a huge table a name is grouped by an indexed copy when
+  there is one (`headliner_key`, shown as `headliner`), and the map uses a
+  smaller table with coordinates (venues, sized by their events). Views are
+  only used if no table will do, since they run their whole query for every
+  panel. Blanks never top a chart. *Add panel* lists more suggestions.
   In Explore, **Add to dashboard** turns whatever you're looking at into a
   panel; a query ending in a Group by becomes a chart of those groups.
 - **Edit any panel** with its pencil. A drawer on the right sets:
@@ -144,9 +149,23 @@ any database. Every panel can be edited.
   you turn it on.
 - **Every panel is a query.** *Show SQL*, *Open in Explore* and *Download as
   Excel* are in its menu.
+- **Quick estimates on big tables.** On a table of 200,000+ rows a panel is
+  drawn first from about 2% of the rows (evenly spaced blocks, read straight
+  off the table, so about 50 times faster and typically within a few %),
+  marked *≈ estimate*, then replaced by the exact figures. Top-N charts of
+  things with only a few rows each (top customers) wait for the exact
+  figures, as a sample can't pick those out. Hover the note for why a panel
+  is slow and which index would help.
+- **Export PDF** saves the dashboard as a PDF (or prints it) on A4
+  landscape: every panel loaded with exact figures and redrawn to fit the
+  page, headed with the dashboard's name, the database, the date and any
+  controls that are set.
 - **Light on the database.** Panels load only when they're on screen, share
   three connections, reuse results they already have, and drop queued work
-  when a control changes. The toolbar shows what's loading, with Stop.
+  when a control changes. Headline figures find the latest date once (off an
+  index, if there is one) rather than reading the table twice. Searching a
+  control's values stops the previous search. The toolbar shows what's
+  loading, with Stop.
 
 Dashboards are saved to a small file beside the database,
 `<database>.dashboards.json`, so they travel with it. If that folder can't be

@@ -24,6 +24,7 @@ import re
 import secrets
 import shlex
 import shutil
+import socket
 import sqlite3
 import sys
 import tempfile
@@ -373,7 +374,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def host_ok(self):
         # Guards against DNS rebinding: only answer requests addressed to us.
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
-        return host in ("127.0.0.1", "localhost")
+        return host in ("127.0.0.1", "localhost", "[::1]")
 
     def api_ok(self):
         # A custom header can't be sent cross-site without a CORS preflight
@@ -548,10 +549,28 @@ def start_server(preferred):
         try:
             server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
             server.daemon_threads = True
-            return server
         except OSError:
             continue
+        also_on_ipv6_loopback(port)
+        return server
     raise SystemExit("No free port found")
+
+
+class _IPv6Server(http.server.ThreadingHTTPServer):
+    address_family = socket.AF_INET6
+    daemon_threads = True
+
+
+def also_on_ipv6_loopback(port):
+    """Answer on [::1] too. "localhost" tries IPv6 first, and with nothing
+    listening there every new connection fails before falling back to
+    127.0.0.1: 0.2s a request in a browser, 2s from some programs. Still this
+    computer only. If IPv6 isn't available, localhost is just slower."""
+    try:
+        v6 = _IPv6Server(("::1", port), Handler)
+    except OSError:
+        return
+    threading.Thread(target=v6.serve_forever, daemon=True).start()
 
 
 def main():

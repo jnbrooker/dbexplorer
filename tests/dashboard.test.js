@@ -163,3 +163,49 @@ test('values for a control, optionally searched', () => {
   const rows = run(D.valuesQuery(base, 'status', 'ship'));
   assert.ok(rows.length >= 1 && rows.every(([v]) => String(v).includes('ship')));
 });
+
+test('long numbers that are all different are identifiers, not amounts', () => {
+  const rows = Array.from({ length: 60 }, (_, i) => [String(9007199254741000 + i * 7), 1000000 + i * 13, i * 3.5 + 20, (i % 7) * 1000]);
+  const c = D.classify([{ name: 'account_number' }, { name: 'loyalty' }, { name: 'price' }, { name: 'tickets' }], rows).cols;
+  assert.strictEqual(c.account_number.role, 'code'); // by name
+  assert.strictEqual(c.loyalty.role, 'code'); // by its values: long, whole and all different
+  assert.strictEqual(c.price.role, 'measure');
+  assert.strictEqual(c.tickets.role, 'measure');
+});
+
+test('totals of huge numbers never overflow, and nothing to add up stays empty', () => {
+  const [[big]] = sql(`SELECT ${D.measureSql({ fn: 'sum', col: 'n' })} FROM (SELECT 9223372036854775807 AS n UNION ALL SELECT 10)`);
+  assert.ok(big > 9e18);
+  const [[none]] = sql(`SELECT ${D.measureSql({ fn: 'sum', col: 'n' })} FROM (SELECT NULL AS n)`);
+  assert.strictEqual(none, null);
+});
+
+test('comparing with the latest 12 months gives the same answer with the latest day looked up first', () => {
+  const { base, prof } = source('orders');
+  const p = panel({ type: 'number', compare: true });
+  const [[latest]] = run(D.latestQuery(p, base, prof, [], opts));
+  assert.match(latest, /^\d{4}-\d{2}-\d{2}$/);
+  const once = D.numberQuery(p, base, prof, [], { ...opts, latest });
+  assert.strictEqual(once.compare, 'latest');
+  assert.ok(!/CROSS JOIN/.test(once.sql), 'reads the rows once');
+  assert.deepStrictEqual(run(once)[0], run(D.numberQuery(p, base, prof, [], opts))[0]);
+});
+
+test('quick estimates read evenly spaced blocks of a big table, scaled back up', () => {
+  const cols = [{ name: 'id' }, { name: 'status' }];
+  assert.strictEqual(D.sampleSource('orders', cols, 5000), null); // small: just read it all
+  const s = D.sampleSource('orders', cols, 2000000);
+  assert.strictEqual((s.sql.match(/rowid BETWEEN/g) || []).length, 40);
+  assert.ok(Math.abs(s.factor - 50) < 1, `about 2% of the rows (factor ${s.factor})`);
+  assert.strictEqual(D.sampleSource('orders', cols, 2000000).sql, s.sql, 'the same blocks every time, so results cache');
+});
+
+test('connection names sent to the server are ones it accepts (letters, digits, _)', () => {
+  const fs = require('node:fs');
+  for (const f of ['app.js', 'dashboard.js']) {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'js', f), 'utf8');
+    for (const [, key] of src.matchAll(/query\([^;]*?,\s*'([^']*)'\s*,/g)) {
+      assert.match(key, /^\w{1,32}$/, `${f}: query key "${key}" would be refused as a "Bad query key"`);
+    }
+  }
+});
